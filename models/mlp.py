@@ -8,20 +8,27 @@ class Net(nn.Module):
         super(Net, self).__init__()
         self.fc1 = BayesianLinear(
             784,
-            256,
+            400,
             prior_sigma1=prior_sigma1,
             prior_sigma2=prior_sigma2,
             pi=prior_pi
         )
         self.fc2 = BayesianLinear(
-            256,
-            256,
+            400,
+            400,
             prior_sigma1=prior_sigma1,
             prior_sigma2=prior_sigma2,
             pi=prior_pi
         )
         self.fc3 = BayesianLinear(
-            256,
+            400,
+            400,
+            prior_sigma1=prior_sigma1,
+            prior_sigma2=prior_sigma2,
+            pi=prior_pi
+        )
+        self.fc4 = BayesianLinear(
+            400,
             num_classes,
             prior_sigma1=prior_sigma1,
             prior_sigma2=prior_sigma2,
@@ -33,7 +40,8 @@ class Net(nn.Module):
         x = x.view(x.size(0), -1)  # Flatten
         x = self.relu(self.fc1(x))
         x = self.relu(self.fc2(x))
-        x = self.fc3(x)
+        x = self.relu(self.fc3(x))
+        x = self.fc4(x)
         return x
 
     def kl_divergence(self):
