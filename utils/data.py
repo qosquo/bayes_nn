@@ -1,5 +1,4 @@
-import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 from torchvision import datasets, transforms
 
 
@@ -10,7 +9,7 @@ def get_dataloaders(
         use_cuda: bool = True,
 ):
     """
-    Returns train_loader, test_loader
+    Returns train_loader, val_loader, test_loader
     """
 
     # Standard transforms for MNIST
@@ -20,7 +19,7 @@ def get_dataloaders(
     ])
 
     # Download + load datasets
-    train_dataset = datasets.MNIST(
+    full_train_dataset = datasets.MNIST(
         root=data_dir,
         train=True,
         download=True,
@@ -34,12 +33,24 @@ def get_dataloaders(
         transform=transform,
     )
 
+    # Split the training dataset into training and validation sets
+    train_size = 50000
+    val_size = len(full_train_dataset) - train_size
+    train_dataset, val_dataset = random_split(full_train_dataset, [train_size, val_size])
+
     kwargs = {"num_workers": num_workers, "pin_memory": True} if use_cuda else {}
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
+        **kwargs,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
         **kwargs,
     )
 
@@ -50,4 +61,4 @@ def get_dataloaders(
         **kwargs,
     )
 
-    return train_loader, test_loader
+    return train_loader, val_loader, test_loader

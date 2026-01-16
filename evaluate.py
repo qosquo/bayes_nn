@@ -51,7 +51,7 @@ if __name__ == "__main__":
     device = config.device
 
     # Prepare data
-    _, test_loader = get_dataloaders(
+    _, _, test_loader = get_dataloaders(
         data_dir="data",
         batch_size=config.test_batch_size,
         num_workers=config.num_workers,

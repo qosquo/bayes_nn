@@ -1,3 +1,5 @@
+import argparse
+
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
@@ -15,14 +17,34 @@ from utils.checkpoint import save_checkpoint, load_checkpoint
 # Optional Weights & Biases
 USE_WANDB = False
 if USE_WANDB:
-    import wandb
-    wandb.init(project="bayesian-nn")
+    try:
+        import wandb
+        wandb.init(project="bayesian-nn")
+    except ImportError:
+        print("wandb module not found. Please install it if you want to use Weights & Biases.")
+        USE_WANDB = False
 
 
-def elbo_loss(model, x, y, num_batches):
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model_name', type=str, default=None)
+    parser.add_argument('--batch_size', type=int, default=None)
+    parser.add_argument('--learning_rate', type=float, default=None)
+    parser.add_argument('--n_epochs', type=int, default=None)
+    parser.add_argument('--prior_sigma1', type=float, default=None)
+    parser.add_argument('--prior_sigma2', type=float, default=None)
+    parser.add_argument('--prior_pi', type=float, default=None)
+    return parser.parse_args()
+
+
+def elbo_loss(model, x, y, num_batches, writer=None):
     output = model(x)
     nll = F.cross_entropy(output, y, reduction='sum')  # -log P(D|w)
     kl = model.kl_divergence()  # KL[q(w|θ) || P(w)]
+
+    if writer:
+        writer.add_scalar("train/kl_divergence", kl.item(), None)
+        writer.add_scalar("train/negative_log_likelihood", nll.item(), None)
 
     # Scale KL by minibatch weight (1/M from paper)
     return (kl / num_batches + nll) / x.size(0)
@@ -35,11 +57,11 @@ def train(model, optimizer, train_loader, device, epoch, log_interval, grad_clip
     loop = tqdm(train_loader, desc=f"Epoch {epoch}", leave=False)
 
     for batch_idx, (x, y) in enumerate(loop):
-        x, y = x.to(device), y.to(device)
+        x, y = torch.tensor(x).to(device), torch.tensor(y).to(device)
 
         optimizer.zero_grad()
 
-        loss = elbo_loss(model, x, y, len(train_loader))
+        loss = elbo_loss(model, x, y, len(train_loader), writer)
         loss.backward()
 
         if grad_clip:
@@ -97,6 +119,12 @@ def test(model, test_loader, device, epoch, writer=None, T=1):
 def main():
     config = Config()
     device = config.device
+    args = parse_args()
+
+    for key, value in vars(args).items():
+        print(key, value)
+        if value is not None:
+            setattr(config, key, value)
 
     # TensorBoard
     writer = SummaryWriter(log_dir="runs/{}_{}".format(
@@ -105,7 +133,7 @@ def main():
     ))
 
     # Data
-    train_loader, test_loader = get_dataloaders(
+    train_loader, val_loader, test_loader = get_dataloaders(
         data_dir="data",
         batch_size=config.batch_size,
         num_workers=config.num_workers,
@@ -140,7 +168,9 @@ def main():
             writer=writer
         )
 
-        test_loss, acc = test(model, test_loader, device, epoch, writer)
+        # Validation step
+        val_loss, val_acc = test(model, val_loader, device, epoch, writer, T=1)
+        print(f"Validation: loss={val_loss:.6f}, acc={val_acc * 100:.2f}%")
 
         scheduler.step()
 

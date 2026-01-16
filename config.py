@@ -16,7 +16,7 @@ class Config:
     # Training hyperparameters
     batch_size = 128
     test_batch_size = 14
-    n_epochs = 100
+    n_epochs = 600
     learning_rate = 1e-3
     gamma = 0.95  # LR decay
 
