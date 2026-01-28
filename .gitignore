@@ -428,6 +428,7 @@ data/
 # Temporary experiment outputs
 outputs/
 experiments/
+tunes/
 logs/
 
 # WandB logs (if you ever enable it)

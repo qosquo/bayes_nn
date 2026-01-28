@@ -1,12 +1,14 @@
 # tune.py
 import argparse
 import math
+from datetime import datetime
 
 import optuna
+from torch.utils.tensorboard import SummaryWriter
 
 from config import Config
 from train import train, test
-from models.mlp import Net
+from models.lenet import Net
 from utils.data import get_dataloaders
 import torch
 
@@ -30,7 +32,18 @@ def objective(trial: optuna.trial.Trial) -> float:
     sigma1 = math.exp(log_sigma1)
     sigma2 = math.exp(log_sigma2)
     pi = trial.suggest_float('prior_pi', 0.2, 0.8)
-    T = trial.suggest_categorical('T', [1, 2, 5, 10])
+    # T = trial.suggest_categorical('T', [2, 5, 10, 20])
+    num_batches = trial.suggest_categorical('num_batches', [64, 128, 256])
+
+    config.batch_size = num_batches
+    config.n_epochs = 50  # For tuning, use fewer epochs
+    best_val_loss = float('inf')
+    no_improve = 0
+
+    writer = SummaryWriter(log_dir="tunes/{}_{}".format(
+        f"{args.study_name if args.study_name else 'optuna_study'}_trial{trial.number}",
+        datetime.now().strftime("%Y%m%d-%H%M%S")
+    ))
 
     # Create model
     model = Net(prior_sigma1=sigma1, prior_sigma2=sigma2,
@@ -45,30 +58,21 @@ def objective(trial: optuna.trial.Trial) -> float:
         use_cuda=torch.cuda.is_available(),
     )
 
-    # Train for N epochs
-    best_val_acc = 0
-    patience = 5
-    no_improve = 0
-
     for epoch in range(config.n_epochs):
-        train(model, optimizer, train_loader, device, epoch, config.log_interval)
-        val_loss, val_acc = test(model, val_loader, device, epoch, T=T)
+        train(model, optimizer, train_loader, device, epoch, config.log_interval, writer=writer)
+        val_loss, _ = test(model, val_loader, device, epoch, T=config.mc_samples, writer=writer)
 
-        # Report intermediate value for pruning
-        trial.report(val_acc, epoch)
+        trial.report(val_loss, epoch)
         if trial.should_prune():
             raise optuna.TrialPruned()
 
-        # Early stopping
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             no_improve = 0
         else:
             no_improve += 1
-            if no_improve >= patience:
-                break
 
-    return best_val_acc
+    return best_val_loss
 
 
 if __name__ == '__main__':
@@ -77,9 +81,11 @@ if __name__ == '__main__':
         study_name=args.study_name,
         storage=f'sqlite://{args.storage}' if args.storage else None,
         load_if_exists=True,
-        direction='maximize'
+        direction='minimize'
     )
     study.optimize(objective, n_trials=args.n_trials)
 
     print(f"Best params: {study.best_params}")
+    print(f"Best prior sigma1: {math.exp(study.best_params['log_prior_sigma1'])}")
+    print(f"Best prior sigma2: {math.exp(study.best_params['log_prior_sigma2'])}")
     print(f"Best val_acc: {study.best_value}")
