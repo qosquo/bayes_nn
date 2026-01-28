@@ -35,3 +35,18 @@ def load_checkpoint(model, optimizer, path, device):
 
     print(f"[checkpoint] Loaded from {path}, starting at epoch {start_epoch}")
     return start_epoch
+
+
+def load_model(model, path, device):
+    """
+    Loads model.
+    """
+    if not os.path.isfile(path):
+        print(f"[checkpoint] No model found at {path}. Starting fresh.")
+        return 0
+
+    checkpoint = torch.load(path, map_location=device)
+
+    model.load_state_dict(checkpoint["model_state"])
+    print(f"[model] Loaded from {path}")
+    return None

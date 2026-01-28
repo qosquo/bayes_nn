@@ -1,3 +1,5 @@
+import math
+
 import torch
 from datetime import datetime
 
@@ -16,14 +18,14 @@ class Config:
     # Training hyperparameters
     batch_size = 128
     test_batch_size = 14
-    n_epochs = 600
-    learning_rate = 1e-3
+    n_epochs = 200
+    learning_rate = 1e-4
     gamma = 0.95  # LR decay
 
     # Model architecture (BNN priors)
-    prior_sigma1 = 1.5
-    prior_sigma2 = 0.5
-    prior_pi = 0.5
+    prior_sigma1 = 0.1
+    prior_sigma2 = math.exp(-6)
+    prior_pi = 1
 
     # Training settings
     log_interval = 100
@@ -32,9 +34,9 @@ class Config:
 
     # Checkpoint settings
     save_model = True
-    save_interval = 25  # Save every N epochs
+    save_interval = 10  # Save every N epochs
     checkpoint_dir = 'checkpoints'
-    model_name = 'mnist_bnn_mlp'
+    model_name = 'lenet_mnist_lrp1em04_prior1p1_prior20_priorpi1'
 
     # Google Drive (for Colab)
     use_drive = False  # Set True when running on Colab
@@ -45,7 +47,7 @@ class Config:
     pin_memory = True if torch.cuda.is_available() else False
 
     # Uncertainty quantification
-    mc_samples = 5
+    mc_samples = 15
 
     @property
     def checkpoint_path(self):
@@ -58,9 +60,10 @@ class Config:
                 base = self.drive_path if self.use_drive else '.'
         except:
             base = self.drive_path if self.use_drive else '.'
-            
-        return f'{base}/{self.checkpoint_dir}/{self.model_name}.pth'
 
-    def get_checkpoint_name(self, epoch):
-        today = datetime.now().strftime('%Y%m%d')
-        return f'{self.model_name}_epoch_{epoch}_{today}.pth'
+        return f'{base}/{self.checkpoint_dir}'
+
+    def get_checkpoint_name(self, epoch, date: str):
+        if date is None:
+            date = datetime.now().strftime('%Y%m%d')
+        return f'{self.model_name}_epoch_{epoch}_{date}.pth'

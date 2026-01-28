@@ -5,7 +5,7 @@ from config import Config
 from models.lenet import Net
 from utils.data import get_dataloaders
 from utils.checkpoint import load_checkpoint
-from utils.uncertainty import quantify_uncertainties
+from utils.uncertainty import mc_predict, quantify_uncertainties
 
 
 def evaluate(model, test_loader, device):
@@ -26,24 +26,44 @@ def evaluate(model, test_loader, device):
     return acc
 
 
+@torch.no_grad()
 def evaluate_with_uncertainty(model, test_loader, device, mc_samples):
     """
-    Runs uncertainty on the *first* batch only (обычно достаточно).
+    Runs uncertainty over the *entire* test loader.
     """
     model.eval()
 
-    x, y = next(iter(test_loader))
-    x, y = x.to(device), y.to(device)
+    all_preds = []
+    all_aleatoric = []
+    all_epistemic = []
 
-    preds, uncertainties = quantify_uncertainties(model, x, T=mc_samples)
+    for x, y in test_loader:
+        x = x.to(device)
 
-    print("Predictions:", preds.tolist())
-    aleatoric = uncertainties[1].diagonal(dim1=1, dim2=2).sum(-1).mean().item()
-    epistemic = uncertainties[2].diagonal(dim1=1, dim2=2).sum(-1).mean().item()
-    print(f"Aleatoric: {aleatoric}")
-    print(f"Epistemic: {epistemic}")
+        mc_preds = mc_predict(model, x, mc_samples=mc_samples)
+        preds, uncertainties = quantify_uncertainties(mc_preds)
 
-    return preds, uncertainties
+        # uncertainties:
+        # [0] predictive
+        # [1] aleatoric
+        # [2] epistemic
+        aleatoric = uncertainties[1].diagonal(dim1=1, dim2=2).sum(-1)
+        epistemic = uncertainties[2].diagonal(dim1=1, dim2=2).sum(-1)
+
+        all_preds.append(preds.cpu())
+        all_aleatoric.append(aleatoric.cpu())
+        all_epistemic.append(epistemic.cpu())
+
+    all_preds = torch.cat(all_preds)
+    all_aleatoric = torch.cat(all_aleatoric)
+    all_epistemic = torch.cat(all_epistemic)
+    all_total = all_aleatoric + all_epistemic
+
+    print(f"Total Uncertainty (mean): {all_total.mean().item()}")
+    print(f"Aleatoric (mean): {all_aleatoric.mean().item()}")
+    print(f"Epistemic (mean): {all_epistemic.mean().item()}")
+
+    return all_preds, (all_total, all_aleatoric, all_epistemic)
 
 
 if __name__ == "__main__":
