@@ -16,16 +16,16 @@ class Config:
     num_classes = 10
 
     # Training hyperparameters
-    batch_size = 128
+    batch_size = 256
     test_batch_size = 14
     n_epochs = 200
-    learning_rate = 1e-4
+    learning_rate = 5e-5
     gamma = 0.95  # LR decay
 
     # Model architecture (BNN priors)
-    prior_sigma1 = 0.1
+    prior_sigma1 = math.exp(0.25)
     prior_sigma2 = math.exp(-6)
-    prior_pi = 1
+    prior_pi = 0.25
 
     # Training settings
     log_interval = 100
@@ -36,7 +36,7 @@ class Config:
     save_model = True
     save_interval = 10  # Save every N epochs
     checkpoint_dir = 'checkpoints'
-    model_name = 'lenet_mnist_lrp1em04_prior1p1_prior20_priorpi1'
+    model_name = 'lenet_mnist_lrp5em05_logprior1p25_logprior2m06_priorpip25_batch_256_v1'
 
     # Google Drive (for Colab)
     use_drive = False  # Set True when running on Colab
@@ -47,7 +47,7 @@ class Config:
     pin_memory = True if torch.cuda.is_available() else False
 
     # Uncertainty quantification
-    mc_samples = 15
+    mc_samples = 10
 
     @property
     def checkpoint_path(self):
