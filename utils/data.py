@@ -1,3 +1,7 @@
+import torch
+from itertools import islice
+from typing import Tuple
+
 from torch.utils.data import DataLoader, random_split
 from torchvision import datasets, transforms
 
@@ -62,3 +66,19 @@ def get_dataloaders(
     )
 
     return train_loader, val_loader, test_loader
+
+
+def get_img_from_loader(loader: DataLoader, batch_idx: int = 0, img_idx: int = 0, device: str = 'cpu') \
+        -> (torch.Tensor, int):
+    """
+    Get a specific image and label from a DataLoader
+    :param loader:
+    :param batch_idx:
+    :param img_idx:
+    :param device:
+    :return:
+    """
+    img, label = next(islice(loader, batch_idx, batch_idx+1))
+    img = img.to(device)
+    return img[img_idx], label[img_idx]
+
