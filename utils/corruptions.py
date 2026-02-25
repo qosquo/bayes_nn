@@ -3,6 +3,7 @@ from itertools import islice
 from typing import Tuple
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 
 from utils.uncertainty import quantify_uncertainties, mc_predict
@@ -62,3 +63,46 @@ def test_on_corruptions(model, img, corruptions: dict = None, classes: tuple = N
 
     plt.tight_layout()
     plt.show()
+
+
+def corruptions_uncertainty(model, img, corruptions: dict = None, T=5):
+    """Проверка изображения на разных типах искажений"""
+
+    assert corruptions is not None
+
+    FIXED_MAX = 0.3
+    fig, axes = plt.subplots(2, len(corruptions.keys()), figsize=(15, 8))
+
+    for col, (name, corrupt_fn) in enumerate(corruptions.items()):
+        corrupted = corrupt_fn(img).unsqueeze(0)
+        mc_preds = mc_predict(model, corrupted, mc_samples=T)
+        mean_probs = mc_preds.mean(0)[0]
+        pred, (total, alea, epis) = quantify_uncertainties(mc_preds)
+
+        # Изображение
+        axes[0, col].imshow(corrupted.cpu().squeeze(), cmap='gray')
+        axes[0, col].set_title(f'{name}\nPred: {pred.item()}')
+        axes[0, col].axis('off')
+
+        uncertainties = {
+            "AU": [alea[0, label, label].item() for label in range(10)],
+            "EU": [epis[0, label, label].item() for label in range(10)],
+        }
+
+        bottom = np.zeros(10)
+        for u_type, values in uncertainties.items():
+            axes[1, col].bar(range(10), values, bottom=bottom, label=u_type)
+            bottom += values
+
+        axes[1, col].set_ylim(0, FIXED_MAX)
+        axes[1, col].set_xticks(range(10))
+        axes[1, col].set_xticklabels(range(10))
+        axes[1, col].set_title(f'{name} Uncertainties')
+        axes[1, col].set_xlabel('Class')
+        axes[1, col].set_ylabel('Uncertainty')
+        axes[1, col].legend(loc="upper right")
+
+
+    plt.tight_layout()
+    plt.show()
+
