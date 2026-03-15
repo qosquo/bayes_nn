@@ -47,10 +47,11 @@ def elbo_loss(output, y, kl, beta):
 
 
 def train(model, optimizer, train_loader, device, epoch, grad_clip=None, T=1,
-          beta_schedule='blundell', n_epochs=None, writer=None):
+          beta_schedule='blundell', warmup_factor=1.0, max_steps=None, writer=None):
     model.train()
     total_loss = 0
     accuracy = 0
+    steps_done = 0
 
     loop = tqdm(train_loader, desc=f"Epoch {epoch}", leave=False)
     M = len(train_loader)
@@ -63,7 +64,6 @@ def train(model, optimizer, train_loader, device, epoch, grad_clip=None, T=1,
         if beta_schedule == 'uniform':
             beta = 1.0 / M
         elif beta_schedule == 'warmup':
-            warmup_factor = min(1.0, (2 * epoch + 1) / n_epochs) if n_epochs else 1.0
             beta = warmup_factor / M
         else:  # 'blundell'
             beta = (2 ** (M - batch_idx - 1)) / (2 ** M - 1)

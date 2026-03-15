@@ -5,15 +5,17 @@ import math
 from datetime import datetime
 
 import optuna
+import torch
+import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
 from config import Config
-from train import train, test
+from train import train
 from models.lenet import Net
 from utils.data import get_dataloaders
-import torch
+from utils.calibration import expected_calibration_error
 
-PATIENCE = 10
+FIXED_EPOCHS = 10  # each trial sees 10 * 60k = 600k examples regardless of batch size
 
 
 def parse_args():
@@ -22,6 +24,23 @@ def parse_args():
     parser.add_argument('--storage', type=str, default=None)
     parser.add_argument('--n_trials', type=int, default=30)
     return parser.parse_args()
+
+
+def mc_val_nll(model, val_loader, device, n_samples=10):
+    """Predictive NLL via MC-averaging: -1/N Σ log(1/T Σ p(y|x,w_t))"""
+    model.train()  # keep stochastic weight sampling
+    total_nll = 0.0
+    total_samples = 0
+    with torch.no_grad():
+        for x, y in val_loader:
+            x, y = x.to(device), y.to(device)
+            log_probs = torch.stack([
+                F.log_softmax(model(x), dim=1) for _ in range(n_samples)
+            ])  # [n_samples, batch, classes]
+            log_mixture = torch.logsumexp(log_probs, dim=0) - math.log(n_samples)
+            total_nll += F.nll_loss(log_mixture, y, reduction='sum').item()
+            total_samples += y.size(0)
+    return total_nll / total_samples
 
 
 def objective(trial: optuna.trial.Trial, study_name: str) -> float:
@@ -42,16 +61,12 @@ def objective(trial: optuna.trial.Trial, study_name: str) -> float:
     num_batches = trial.suggest_categorical('num_batches', [64, 128, 256])
 
     config.batch_size = num_batches
-    config.n_epochs = 50
-    best_val_loss = float('inf')
-    no_improve = 0
 
     writer = SummaryWriter(log_dir="tunes/{}_{}".format(
         f"{study_name if study_name else 'optuna_study'}_trial{trial.number}",
         datetime.now().strftime("%Y%m%d-%H%M%S")
     ))
 
-    # Create model
     model = Net(
         prior_sigma1=sigma1,
         prior_sigma2=sigma2,
@@ -61,37 +76,45 @@ def objective(trial: optuna.trial.Trial, study_name: str) -> float:
     ).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    # Get data
-    train_loader, val_loader, test_loader = get_dataloaders(
+    train_loader, val_loader, _ = get_dataloaders(
         data_dir="data",
         batch_size=config.batch_size,
         num_workers=config.num_workers,
         use_cuda=torch.cuda.is_available(),
     )
 
-    for epoch in range(config.n_epochs):
+    for epoch in range(FIXED_EPOCHS):
+        warmup_factor = min(1.0, 2.0 * epoch / FIXED_EPOCHS) if beta_schedule == 'warmup' else 1.0
         train(
             model, optimizer, train_loader, device, epoch,
             grad_clip=grad_clip, T=t_train,
-            beta_schedule=beta_schedule, n_epochs=config.n_epochs,
+            beta_schedule=beta_schedule, warmup_factor=warmup_factor,
             writer=writer,
         )
-        val_loss, _ = test(model, val_loader, device, epoch, T=config.mc_samples, writer=writer)
 
-        trial.report(val_loss, epoch)
-        if trial.should_prune():
-            raise optuna.TrialPruned()
+        if epoch % 3 == 0 or epoch == FIXED_EPOCHS - 1:
+            # Cheap interim NLL (T=5) for pruning decisions
+            interim_nll = mc_val_nll(model, val_loader, device, n_samples=5)
+            trial.report(interim_nll, epoch)
+            if trial.should_prune():
+                writer.close()
+                raise optuna.TrialPruned()
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            no_improve = 0
-        else:
-            no_improve += 1
-            if no_improve >= PATIENCE:
-                break
+    # Final evaluation: full MC NLL
+    val_nll = mc_val_nll(model, val_loader, device, n_samples=10)
+
+    # Secondary metrics: logged but not optimized
+    mean_sigma = torch.mean(torch.stack([
+        torch.log1p(torch.exp(p)).mean()
+        for name, p in model.named_parameters() if 'rho' in name
+    ])).item()
+    ece, _, _ = expected_calibration_error(model, val_loader, device, T=10)
+
+    trial.set_user_attr('mean_sigma', mean_sigma)
+    trial.set_user_attr('ece', ece)
 
     writer.close()
-    return best_val_loss
+    return val_nll
 
 
 if __name__ == '__main__':
@@ -101,7 +124,10 @@ if __name__ == '__main__':
         storage=f'sqlite://{args.storage}' if args.storage else None,
         load_if_exists=True,
         direction='minimize',
-        pruner=optuna.pruners.MedianPruner(n_warmup_steps=10),
+        pruner=optuna.pruners.MedianPruner(
+            n_startup_trials=5,   # первые 5 trial'ов — полностью
+            n_warmup_steps=3,     # pruning после 3-й эпохи
+        ),
     )
     study.optimize(
         functools.partial(objective, study_name=args.study_name),
@@ -111,4 +137,4 @@ if __name__ == '__main__':
     print(f"Best params: {study.best_params}")
     print(f"Best prior sigma1: {math.exp(study.best_params['log_prior_sigma1']):.4f}")
     print(f"Best prior sigma2: {math.exp(study.best_params['log_prior_sigma2']):.4f}")
-    print(f"Best val_loss: {study.best_value:.6f}")
+    print(f"Best val_nll: {study.best_value:.6f}")
