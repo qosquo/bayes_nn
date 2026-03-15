@@ -11,9 +11,10 @@ class Config:
     seed = 42
 
     # Data
+    dataset = 'EMNIST'
     data_mean = 0.1307
     data_std = 0.3081
-    num_classes = 10
+    num_classes = 26
 
     # Training hyperparameters
     batch_size = 256

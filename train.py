@@ -57,7 +57,7 @@ def train(model, optimizer, train_loader, device, epoch, grad_clip=None, T=1,
     M = len(train_loader)
 
     for batch_idx, (x, y) in enumerate(loop):
-        x, y = torch.tensor(x).to(device), torch.tensor(y).to(device)
+        x, y = torch.tensor(x).to(device), torch.tensor(y).to(device) - 1
 
         optimizer.zero_grad()
 
@@ -121,7 +121,7 @@ def test(model, test_loader, device, epoch, T=1, writer=None):
 
     with torch.no_grad():
         for batch_idx, (x, y) in enumerate(test_loader):
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(device), y.to(device) - 1
 
             beta = (2 ** (M - batch_idx - 1)) / (2 ** M - 1)
 
@@ -175,6 +175,8 @@ def main():
         batch_size=config.batch_size,
         num_workers=config.num_workers,
         use_cuda=torch.cuda.is_available(),
+        dataset=config.dataset,
+        dataset_kwargs={"split": "letters"},
     )
 
     # Model

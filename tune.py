@@ -33,7 +33,7 @@ def mc_val_nll(model, val_loader, device, n_samples=10):
     total_samples = 0
     with torch.no_grad():
         for x, y in val_loader:
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(device), y.to(device) - 1
             log_probs = torch.stack([
                 F.log_softmax(model(x), dim=1) for _ in range(n_samples)
             ])  # [n_samples, batch, classes]
@@ -48,21 +48,24 @@ def objective(trial: optuna.trial.Trial, study_name: str) -> float:
     device = config.device
 
     # Suggest hyperparameters
-    lr = trial.suggest_float('lr', 1e-5, 1e-2, log=True)
+    # Part 1. These are the ones that will be used for pruning decisions, so they should be cheap to evaluate (e.g., interim NLL after a few epochs)
     log_sigma1 = trial.suggest_float('log_prior_sigma1', -2, 0)
     log_sigma2 = trial.suggest_float('log_prior_sigma2', -8, -6)
     sigma1 = math.exp(log_sigma1)
     sigma2 = math.exp(log_sigma2)
     pi = trial.suggest_float('prior_pi', 0.2, 0.8)
-    t_train = trial.suggest_categorical('T', [1, 2, 5, 10])
     rho_init = trial.suggest_float('rho_init', -7, -3)
-    beta_schedule = trial.suggest_categorical('beta_schedule', ['blundell', 'uniform', 'warmup'])
-    grad_clip = trial.suggest_categorical('grad_clip', [None, 0.5, 1.0, 5.0])
-    num_batches = trial.suggest_categorical('num_batches', [64, 128, 256])
+    # Part 2. Will be ignored for pruning decisions to keep them cheap, but can be used for final evaluation of promising trials
+    t_train = trial.suggest_categorical('T', [1, 2, 5, 10]) if False else 1
+    lr = trial.suggest_float('lr', 1e-5, 1e-2, log=True) if False else config.learning_rate
+    beta_schedule = trial.suggest_categorical('beta_schedule', ['blundell', 'uniform', 'warmup']) if False else 'warmup'
+    grad_clip = trial.suggest_categorical('grad_clip', [None, 0.5, 1.0, 5.0]) if False else 1.0
+    num_batches = trial.suggest_categorical('num_batches', [64, 128, 256]) if False else config.batch_size
 
     config.batch_size = num_batches
 
-    writer = SummaryWriter(log_dir="tunes/{}_{}".format(
+    writer = SummaryWriter(log_dir="tunes/{}/{}_{}".format(
+        study_name if study_name else 'optuna_study',
         f"{study_name if study_name else 'optuna_study'}_trial{trial.number}",
         datetime.now().strftime("%Y%m%d-%H%M%S")
     ))
@@ -71,7 +74,7 @@ def objective(trial: optuna.trial.Trial, study_name: str) -> float:
         prior_sigma1=sigma1,
         prior_sigma2=sigma2,
         prior_pi=pi,
-        num_classes=10,
+        num_classes=config.num_classes,
         rho_init=rho_init,
     ).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -81,6 +84,8 @@ def objective(trial: optuna.trial.Trial, study_name: str) -> float:
         batch_size=config.batch_size,
         num_workers=config.num_workers,
         use_cuda=torch.cuda.is_available(),
+        dataset=config.dataset,
+        dataset_kwargs={"split": "letters"},
     )
 
     for epoch in range(FIXED_EPOCHS):
@@ -108,7 +113,7 @@ def objective(trial: optuna.trial.Trial, study_name: str) -> float:
         torch.log1p(torch.exp(p)).mean()
         for name, p in model.named_parameters() if 'rho' in name
     ])).item()
-    ece, _, _ = expected_calibration_error(model, val_loader, device, T=10)
+    ece, _, _ = expected_calibration_error(model, val_loader, device, T=t_train, num_classes=config.num_classes, num_bins=26)
 
     trial.set_user_attr('mean_sigma', mean_sigma)
     trial.set_user_attr('ece', ece)

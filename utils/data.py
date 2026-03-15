@@ -27,6 +27,8 @@ _DATASET_CLASSES = {
 
 
 def _default_normalize_stats(dataset_key: str) -> Tuple[Tuple[float, ...], Tuple[float, ...]]:
+    if dataset_key == "emnist":
+        return (0.1722,), (0.3309,)
     if dataset_key in _MNIST_LIKE:
         return (0.1307,), (0.3081,)
     if dataset_key == "cifar10":

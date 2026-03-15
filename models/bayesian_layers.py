@@ -40,8 +40,8 @@ class BayesianLinear(nn.Module):
     def forward(self, x):
         w, b, sigma_w, sigma_b, eps_w, eps_b = self._sample_weights()
 
-        log_posterior_w = (- (eps_w**2) / 2 - torch.log(sigma_w) - math.log(math.sqrt(2*math.pi))).mean()
-        log_posterior_b = (- (eps_b**2) / 2 - torch.log(sigma_b) - math.log(math.sqrt(2*math.pi))).mean()
+        log_posterior_w = (- (eps_w**2) / 2 - torch.log(sigma_w) - math.log(math.sqrt(2*math.pi))).sum()
+        log_posterior_b = (- (eps_b**2) / 2 - torch.log(sigma_b) - math.log(math.sqrt(2*math.pi))).sum()
         self.log_var_posterior = log_posterior_w + log_posterior_b
 
         def log_mix_gauss(w, sigma1, sigma2, pi):
@@ -49,8 +49,8 @@ class BayesianLinear(nn.Module):
             g2 = torch.distributions.Normal(0, sigma2).log_prob(w)
             return torch.log(pi*torch.exp(g1) + (1-pi)*torch.exp(g2))
 
-        self.log_prior = log_mix_gauss(w, self.sigma1, self.sigma2, self.pi).mean() \
-                         + log_mix_gauss(b, self.sigma1, self.sigma2, self.pi).mean()
+        self.log_prior = log_mix_gauss(w, self.sigma1, self.sigma2, self.pi).sum() \
+                         + log_mix_gauss(b, self.sigma1, self.sigma2, self.pi).sum()
 
         return F.linear(x, w, b)
 
@@ -96,8 +96,8 @@ class BayesianConv2d(nn.Module):
         w, b, sigma_w, sigma_b, eps_w, eps_b = self._sample_weights()
 
         # Log variational posterior q(w|θ)
-        log_posterior_w = (- (eps_w**2) / 2 - torch.log(sigma_w) - math.log(math.sqrt(2*math.pi))).mean()
-        log_posterior_b = (- (eps_b**2) / 2 - torch.log(sigma_b) - math.log(math.sqrt(2*math.pi))).mean()
+        log_posterior_w = (- (eps_w**2) / 2 - torch.log(sigma_w) - math.log(math.sqrt(2*math.pi))).sum()
+        log_posterior_b = (- (eps_b**2) / 2 - torch.log(sigma_b) - math.log(math.sqrt(2*math.pi))).sum()
         self.log_var_posterior = log_posterior_w + log_posterior_b
 
         # Log scale mixture prior P(w)
@@ -106,7 +106,7 @@ class BayesianConv2d(nn.Module):
             g2 = torch.distributions.Normal(0, sigma2).log_prob(w)
             return torch.log(pi*torch.exp(g1) + (1-pi)*torch.exp(g2))
 
-        self.log_prior = log_mix_gauss(w, self.sigma1, self.sigma2, self.pi).mean() \
-                         + log_mix_gauss(b, self.sigma1, self.sigma2, self.pi).mean()
+        self.log_prior = log_mix_gauss(w, self.sigma1, self.sigma2, self.pi).sum() \
+                         + log_mix_gauss(b, self.sigma1, self.sigma2, self.pi).sum()
 
         return F.conv2d(x, w, b, self.stride, self.padding)
