@@ -46,24 +46,41 @@ def elbo_loss(output, y, kl, beta):
     return F.cross_entropy(output, y, reduction='sum') + beta * kl
 
 
-def train(model, optimizer, train_loader, device, epoch, grad_clip=None, writer=None):
+def train(model, optimizer, train_loader, device, epoch, grad_clip=None, T=1,
+          beta_schedule='blundell', n_epochs=None, writer=None):
     model.train()
     total_loss = 0
     accuracy = 0
 
     loop = tqdm(train_loader, desc=f"Epoch {epoch}", leave=False)
+    M = len(train_loader)
 
     for batch_idx, (x, y) in enumerate(loop):
         x, y = torch.tensor(x).to(device), torch.tensor(y).to(device)
 
         optimizer.zero_grad()
 
-        output = model(x)
-        kl = model.kl_divergence()
+        if beta_schedule == 'uniform':
+            beta = 1.0 / M
+        elif beta_schedule == 'warmup':
+            warmup_factor = min(1.0, (2 * epoch + 1) / n_epochs) if n_epochs else 1.0
+            beta = warmup_factor / M
+        else:  # 'blundell'
+            beta = (2 ** (M - batch_idx - 1)) / (2 ** M - 1)
 
-        # beta = 1 / len(train_loader)
-        beta = (2 ** (len(train_loader) - batch_idx - 1)) / (2 ** (len(train_loader)) - 1)
-        loss = elbo_loss(output, y, kl, beta)
+        if T > 1:
+            losses = []
+            for _ in range(T):
+                out = model(x)
+                kl = model.kl_divergence()
+                losses.append(elbo_loss(out, y, kl, beta))
+            loss = torch.stack(losses).mean()
+            output = out
+        else:
+            output = model(x)
+            kl = model.kl_divergence()
+            loss = elbo_loss(output, y, kl, beta)
+
         loss.backward()
 
         if grad_clip:
@@ -96,20 +113,26 @@ def train(model, optimizer, train_loader, device, epoch, grad_clip=None, writer=
     return total_loss / len(train_loader)
 
 
-def test(model, test_loader, device, epoch, writer=None):
+def test(model, test_loader, device, epoch, T=1, writer=None):
     model.train()
     test_loss = 0
     correct = 0
+    M = len(test_loader)
 
     with torch.no_grad():
         for batch_idx, (x, y) in enumerate(test_loader):
             x, y = x.to(device), y.to(device)
 
-            output = model(x)
-            kl = model.kl_divergence()
+            beta = (2 ** (M - batch_idx - 1)) / (2 ** M - 1)
 
-            # beta = 1 / len(test_loader)
-            beta = (2 ** (len(test_loader) - batch_idx - 1)) / (2 ** (len(test_loader)) - 1)
+            if T > 1:
+                outputs = torch.stack([model(x) for _ in range(T)])
+                output = outputs.mean(0)
+                kl = model.kl_divergence()
+            else:
+                output = model(x)
+                kl = model.kl_divergence()
+
             loss = elbo_loss(output, y, kl, beta)
             test_loss += loss.item()
 

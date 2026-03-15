@@ -22,7 +22,6 @@ def evaluate(model, test_loader, device):
             total += y.size(0)
 
     acc = 100.0 * correct / total
-    print(f"Accuracy: {acc:.2f}%")
     return acc
 
 
@@ -58,10 +57,6 @@ def evaluate_with_uncertainty(model, test_loader, device, mc_samples):
     all_aleatoric = torch.cat(all_aleatoric)
     all_epistemic = torch.cat(all_epistemic)
     all_total = all_aleatoric + all_epistemic
-
-    print(f"Total Uncertainty (mean): {all_total.mean().item()}")
-    print(f"Aleatoric (mean): {all_aleatoric.mean().item()}")
-    print(f"Epistemic (mean): {all_epistemic.mean().item()}")
 
     return all_preds, (all_total, all_aleatoric, all_epistemic)
 

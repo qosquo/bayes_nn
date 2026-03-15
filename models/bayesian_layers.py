@@ -5,17 +5,17 @@ import torch.nn.functional as F
 
 
 class BayesianLinear(nn.Module):
-    def __init__(self, in_features, out_features, prior_sigma1=1.5, prior_sigma2=0.5, pi=0.5):
+    def __init__(self, in_features, out_features, prior_sigma1=1.5, prior_sigma2=0.5, pi=0.5, rho_init=-4.5):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
 
         # variational parameters
         self.mu = nn.Parameter(torch.Tensor(out_features, in_features).normal_(0, 0.1))
-        self.rho = nn.Parameter(torch.Tensor(out_features, in_features).uniform_(-5, -4))
+        self.rho = nn.Parameter(torch.Tensor(out_features, in_features).uniform_(rho_init - 0.5, rho_init + 0.5))
 
         self.mu_bias = nn.Parameter(torch.Tensor(out_features).normal_(0, 0.1))
-        self.rho_bias = nn.Parameter(torch.Tensor(out_features).uniform_(-5, -4))
+        self.rho_bias = nn.Parameter(torch.Tensor(out_features).uniform_(rho_init - 0.5, rho_init + 0.5))
 
         # scale mixture prior
         self.sigma1 = prior_sigma1
@@ -56,7 +56,7 @@ class BayesianLinear(nn.Module):
 
 class BayesianConv2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
-                 prior_sigma1=1.5, prior_sigma2=0.5, pi=0.5):
+                 prior_sigma1=1.5, prior_sigma2=0.5, pi=0.5, rho_init=-4.5):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -66,11 +66,11 @@ class BayesianConv2d(nn.Module):
 
         # Variational parameters for weights
         self.mu = nn.Parameter(torch.Tensor(out_channels, in_channels, *self.kernel_size).normal_(0, 0.1))
-        self.rho = nn.Parameter(torch.Tensor(out_channels, in_channels, *self.kernel_size).uniform_(-5, -4))
+        self.rho = nn.Parameter(torch.Tensor(out_channels, in_channels, *self.kernel_size).uniform_(rho_init - 0.5, rho_init + 0.5))
 
         # Variational parameters for bias
         self.mu_bias = nn.Parameter(torch.Tensor(out_channels).normal_(0, 0.1))
-        self.rho_bias = nn.Parameter(torch.Tensor(out_channels).uniform_(-5, -4))
+        self.rho_bias = nn.Parameter(torch.Tensor(out_channels).uniform_(rho_init - 0.5, rho_init + 0.5))
 
         # Scale mixture prior
         self.sigma1 = prior_sigma1

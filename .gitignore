@@ -427,6 +427,7 @@ data/
 
 # Temporary experiment outputs
 outputs/
+pics/
 experiments/
 tunes/
 logs/

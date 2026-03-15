@@ -5,7 +5,7 @@ from models.bayesian_layers import BayesianConv2d, BayesianLinear
 
 
 class Net(nn.Module):
-    def __init__(self, prior_sigma1, prior_sigma2, prior_pi, num_classes=10):
+    def __init__(self, prior_sigma1, prior_sigma2, prior_pi, num_classes=10, rho_init=-4.5):
         super(Net, self).__init__()
         self.conv1 = BayesianConv2d(
             1,
@@ -15,7 +15,8 @@ class Net(nn.Module):
             padding=2,
             prior_sigma1=prior_sigma1,
             prior_sigma2=prior_sigma2,
-            pi=prior_pi
+            pi=prior_pi,
+            rho_init=rho_init,
         )  # 28x28 -> 28x28
         self.pool1 = nn.AvgPool2d(kernel_size=2, stride=2)  # 28x28 -> 14x14
         self.conv2 = BayesianConv2d(
@@ -25,7 +26,8 @@ class Net(nn.Module):
             stride=1,
             prior_sigma1=prior_sigma1,
             prior_sigma2=prior_sigma2,
-            pi=prior_pi
+            pi=prior_pi,
+            rho_init=rho_init,
         )  # 14x14 -> 10x10
         self.pool2 = nn.AvgPool2d(kernel_size=2, stride=2)  # 10x10 -> 5x5
 
@@ -35,21 +37,24 @@ class Net(nn.Module):
             120,
             prior_sigma1=prior_sigma1,
             prior_sigma2=prior_sigma2,
-            pi=prior_pi
+            pi=prior_pi,
+            rho_init=rho_init,
         )
         self.fc2 = BayesianLinear(
             120,
             84,
             prior_sigma1=prior_sigma1,
             prior_sigma2=prior_sigma2,
-            pi=prior_pi
+            pi=prior_pi,
+            rho_init=rho_init,
         )
         self.fc3 = BayesianLinear(
             84,
             num_classes,
             prior_sigma1=prior_sigma1,
             prior_sigma2=prior_sigma2,
-            pi=prior_pi
+            pi=prior_pi,
+            rho_init=rho_init,
         )
 
     def forward(self, x):
