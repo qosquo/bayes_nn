@@ -17,27 +17,30 @@ class Config:
     num_classes = 26
 
     # Training hyperparameters
-    batch_size = 256
+    t_train = 1
+    batch_size = 64
     test_batch_size = 14
-    n_epochs = 200
-    learning_rate = 5e-5
+    n_epochs = 100
+    learning_rate = 0.0009426338014280636
     gamma = 0.95  # LR decay
+    gradient_clip_norm = 1.0
+    beta_schedule = 'warmup'
 
     # Model architecture (BNN priors)
-    prior_sigma1 = math.exp(0.25)
-    prior_sigma2 = math.exp(-6)
-    prior_pi = 0.25
+    prior_sigma1 = math.exp(-0.8470609173270909)
+    prior_sigma2 = math.exp(-7.293222293379696)
+    prior_pi = 0.44622172885322486
+    rho_init = -5.724956071835678
 
     # Training settings
     log_interval = 100
-    gradient_clip_norm = 1.0
     scheduler_step_size = 50
 
     # Checkpoint settings
     save_model = True
     save_interval = 10  # Save every N epochs
     checkpoint_dir = 'checkpoints'
-    model_name = 'lenet_mnist_lrp5em05_logprior1p25_logprior2m06_priorpip25_batch_256_v1'
+    model_name = 'lenet_emnist_lrp9p426em04_logprior1mp847_logprior2m7p293_priorpip446_rhoinit_m5p724_batch_64_v1'
 
     # Google Drive (for Colab)
     use_drive = False  # Set True when running on Colab

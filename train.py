@@ -17,6 +17,7 @@ from utils.calibration import reliability_diagram
 from utils.data import get_dataloaders
 from utils.checkpoint import save_checkpoint, load_checkpoint
 from utils.uncertainty import mc_predict
+from utils.calibration import mc_val_nll
 
 # Optional Weights & Biases
 USE_WANDB = False
@@ -47,11 +48,10 @@ def elbo_loss(output, y, kl, beta):
 
 
 def train(model, optimizer, train_loader, device, epoch, grad_clip=None, T=1,
-          beta_schedule='blundell', warmup_factor=1.0, max_steps=None, writer=None):
+          beta_schedule='blundell', warmup_factor=1.0, writer=None):
     model.train()
     total_loss = 0
     accuracy = 0
-    steps_done = 0
 
     loop = tqdm(train_loader, desc=f"Epoch {epoch}", leave=False)
     M = len(train_loader)
@@ -113,7 +113,7 @@ def train(model, optimizer, train_loader, device, epoch, grad_clip=None, T=1,
     return total_loss / len(train_loader)
 
 
-def test(model, test_loader, device, epoch, T=1, writer=None):
+def test(model, test_loader, device, epoch, T=1, beta_schedule='blundell', warmup_factor=1.0, writer=None):
     model.train()
     test_loss = 0
     correct = 0
@@ -123,7 +123,12 @@ def test(model, test_loader, device, epoch, T=1, writer=None):
         for batch_idx, (x, y) in enumerate(test_loader):
             x, y = x.to(device), y.to(device) - 1
 
-            beta = (2 ** (M - batch_idx - 1)) / (2 ** M - 1)
+            if beta_schedule == 'uniform':
+                beta = 1.0 / M
+            elif beta_schedule == 'warmup':
+                beta = warmup_factor / M
+            else:  # 'blundell'
+                beta = (2 ** (M - batch_idx - 1)) / (2 ** M - 1)
 
             if T > 1:
                 outputs = torch.stack([model(x) for _ in range(T)])
@@ -141,8 +146,6 @@ def test(model, test_loader, device, epoch, T=1, writer=None):
 
     test_loss /= len(test_loader.dataset)
     accuracy = correct / len(test_loader.dataset)
-
-    print(f"Test: loss={test_loss:.6f}, acc={accuracy * 100:.2f}%")
 
     if writer:
         writer.add_scalar("test/loss", test_loss, epoch)
@@ -164,7 +167,8 @@ def main():
             setattr(config, key, value)
 
     # TensorBoard
-    writer = SummaryWriter(log_dir="runs/{}_{}".format(
+    writer = SummaryWriter(log_dir="runs/{}/{}_{}".format(
+        config.model_name,
         config.model_name,
         datetime.now().strftime("%Y%m%d-%H%M%S")
     ))
@@ -185,6 +189,7 @@ def main():
         prior_sigma2=config.prior_sigma2,
         prior_pi=config.prior_pi,
         num_classes=config.num_classes,
+        rho_init=config.rho_init
     ).to(device)
 
     # Optimizer & scheduler
@@ -200,21 +205,38 @@ def main():
 
     # Training loop
     for epoch in range(start_epoch, config.n_epochs):
+        warmup_factor = min(1.0, epoch / 20)  # warmup over 20 epochs
         train_loss = train(
             model=model,
             optimizer=optimizer,
             train_loader=train_loader,
             device=device,
             epoch=epoch,
-            grad_clip=None,
+            grad_clip=config.gradient_clip_norm,
+            T=config.t_train,
+            beta_schedule=config.beta_schedule,
+            warmup_factor=warmup_factor,
             writer=writer
         )
 
         # Validation step
-        val_loss, val_acc = test(model, val_loader, device, epoch, writer)
-        print(f"Validation: loss={val_loss:.6f}, acc={val_acc * 100:.2f}%")
+        val_loss, val_acc = test(
+            model,
+            val_loader,
+            device,
+            epoch,
+            T=config.t_train,
+            beta_schedule=config.beta_schedule,
+            warmup_factor=warmup_factor,
+            writer=writer
+        )
+        val_nll = mc_val_nll(model, val_loader, device, n_samples=config.mc_samples)
+        scheduler.step(val_nll)
+        print(f"Validation: nll={val_nll:.6f}, loss={val_loss:.6f}, acc={val_acc * 100:.2f}%")
 
-        scheduler.step(val_loss)
+        if writer:
+            writer.add_scalar("test/mc_nll", val_nll, epoch)
+            writer.add_scalar("train/warmup_factor", warmup_factor, epoch)
 
         # Save checkpoint
         if config.save_model and epoch % config.save_interval == 0:
@@ -222,10 +244,21 @@ def main():
                 model,
                 optimizer,
                 epoch,
-                f"{config.checkpoint_dir}/{config.get_checkpoint_name(epoch, date)}"
+                f"{config.checkpoint_dir}/{config.model_name}/{config.get_checkpoint_name(epoch, date)}"
             )
             if writer:
-                writer.add_figure('model/reliability_diagram', reliability_diagram(model, val_loader, device), epoch)
+                writer.add_figure(
+                    'model/reliability_diagram',
+                    reliability_diagram(
+                        model,
+                        val_loader,
+                        device,
+                        T=config.t_train,
+                        num_classes=config.num_classes,
+                        n_bins=config.num_classes
+                    ),
+                    epoch
+                )
 
     # Save final model
     if config.save_model:

@@ -15,7 +15,7 @@ from models.lenet import Net
 from utils.data import get_dataloaders
 from utils.calibration import expected_calibration_error
 
-FIXED_EPOCHS = 10  # each trial sees 10 * 60k = 600k examples regardless of batch size
+FIXED_EPOCHS = 30
 
 
 def parse_args():

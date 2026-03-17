@@ -1,7 +1,29 @@
+import math
+
 import torch
+import torch.nn.functional as F
 from torchmetrics.classification import MulticlassCalibrationError
 import matplotlib.pyplot as plt
 from utils.uncertainty import mc_predict
+
+@torch.no_grad()
+def mc_val_nll(model, val_loader, device, n_samples=10):
+    """Predictive NLL via MC-averaging: -1/N Σ log(1/T Σ p(y|x,w_t))"""
+    model.train()  # keep stochastic weight sampling
+    total_nll = 0.0
+    total_samples = 0
+
+    for x, y in val_loader:
+        x, y = x.to(device), y.to(device) - 1
+        log_probs = torch.stack([
+            F.log_softmax(model(x), dim=1) for _ in range(n_samples)
+        ])  # [n_samples, batch, classes]
+        log_mixture = torch.logsumexp(log_probs, dim=0) - math.log(n_samples)
+        total_nll += F.nll_loss(log_mixture, y, reduction='sum').item()
+        total_samples += y.size(0)
+    return total_nll / total_samples
+
+
 
 @torch.no_grad()
 def expected_calibration_error(model, test_loader, device, T=20, num_bins=10, num_classes=10):
