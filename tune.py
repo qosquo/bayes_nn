@@ -6,14 +6,13 @@ from datetime import datetime
 
 import optuna
 import torch
-import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
 from config import Config
 from train import train
 from models.lenet import Net
 from utils.data import get_dataloaders
-from utils.calibration import expected_calibration_error
+from utils.calibration import expected_calibration_error, mc_val_nll
 
 FIXED_EPOCHS = 30
 
@@ -24,23 +23,6 @@ def parse_args():
     parser.add_argument('--storage', type=str, default=None)
     parser.add_argument('--n_trials', type=int, default=30)
     return parser.parse_args()
-
-
-def mc_val_nll(model, val_loader, device, n_samples=10):
-    """Predictive NLL via MC-averaging: -1/N Σ log(1/T Σ p(y|x,w_t))"""
-    model.train()  # keep stochastic weight sampling
-    total_nll = 0.0
-    total_samples = 0
-    with torch.no_grad():
-        for x, y in val_loader:
-            x, y = x.to(device), y.to(device) - 1
-            log_probs = torch.stack([
-                F.log_softmax(model(x), dim=1) for _ in range(n_samples)
-            ])  # [n_samples, batch, classes]
-            log_mixture = torch.logsumexp(log_probs, dim=0) - math.log(n_samples)
-            total_nll += F.nll_loss(log_mixture, y, reduction='sum').item()
-            total_samples += y.size(0)
-    return total_nll / total_samples
 
 
 def objective(trial: optuna.trial.Trial, study_name: str) -> float:

@@ -90,6 +90,9 @@ def get_dataloaders(
     if dataset_key == "emnist" and "split" not in dataset_kwargs:
         dataset_kwargs["split"] = "balanced"
 
+    if dataset_key == "emnist" and dataset_kwargs.get("split") == "letters":
+        dataset_kwargs.setdefault("target_transform", lambda y: y - 1)
+
     transform = _build_transform(dataset_key, extra_transforms, normalize)
 
     # Download + load datasets

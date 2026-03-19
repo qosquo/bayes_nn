@@ -57,7 +57,7 @@ def train(model, optimizer, train_loader, device, epoch, grad_clip=None, T=1,
     M = len(train_loader)
 
     for batch_idx, (x, y) in enumerate(loop):
-        x, y = torch.tensor(x).to(device), torch.tensor(y).to(device) - 1
+        x, y = torch.tensor(x).to(device), torch.tensor(y).to(device)
 
         optimizer.zero_grad()
 
@@ -121,7 +121,7 @@ def test(model, test_loader, device, epoch, T=1, beta_schedule='blundell', warmu
 
     with torch.no_grad():
         for batch_idx, (x, y) in enumerate(test_loader):
-            x, y = x.to(device), y.to(device) - 1
+            x, y = x.to(device), y.to(device)
 
             if beta_schedule == 'uniform':
                 beta = 1.0 / M
