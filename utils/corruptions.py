@@ -65,7 +65,7 @@ def test_on_corruptions(model, img, corruptions: dict = None, classes: tuple = N
     plt.show()
 
 
-def corruptions_uncertainty(model, img, corruptions: dict = None, T=5):
+def corruptions_uncertainty(model, img, label=None, corruptions: dict = None, num_classes=10, T=5):
     """Проверка изображения на разных типах искажений"""
 
     assert corruptions is not None
@@ -76,27 +76,38 @@ def corruptions_uncertainty(model, img, corruptions: dict = None, T=5):
     for col, (name, corrupt_fn) in enumerate(corruptions.items()):
         corrupted = corrupt_fn(img).unsqueeze(0)
         mc_preds = mc_predict(model, corrupted, mc_samples=T)
-        mean_probs = mc_preds.mean(0)[0]
         pred, (total, alea, epis) = quantify_uncertainties(mc_preds)
+
+
+        total = total.diagonal(dim1=1, dim2=2).sum(-1)
+        aleatoric = alea.diagonal(dim1=1, dim2=2).sum(-1)
+        epistemic = epis.diagonal(dim1=1, dim2=2).sum(-1)
 
         # Изображение
         axes[0, col].imshow(corrupted.cpu().squeeze(), cmap='gray')
-        axes[0, col].set_title(f'{name}\nPred: {pred.item()}')
+        axes[0, col].set_title(f"""
+{name}
+Pred: {pred.item()}, True: {label}
+Total: {total.item():.4f}
+Aleatoric: {aleatoric.item():.4f}
+Epistemic: {epistemic.item():.4f}
+        """
+        )
         axes[0, col].axis('off')
 
         uncertainties = {
-            "AU": [alea[0, label, label].item() for label in range(10)],
-            "EU": [epis[0, label, label].item() for label in range(10)],
+            "AU": [alea[0, label, label].item() for label in range(num_classes)],
+            "EU": [epis[0, label, label].item() for label in range(num_classes)],
         }
 
-        bottom = np.zeros(10)
+        bottom = np.zeros(num_classes)
         for u_type, values in uncertainties.items():
-            axes[1, col].bar(range(10), values, bottom=bottom, label=u_type)
+            axes[1, col].bar(range(num_classes), values, bottom=bottom, label=u_type)
             bottom += values
 
         axes[1, col].set_ylim(0, FIXED_MAX)
-        axes[1, col].set_xticks(range(10))
-        axes[1, col].set_xticklabels(range(10))
+        axes[1, col].set_xticks(range(num_classes))
+        axes[1, col].set_xticklabels(range(num_classes))
         axes[1, col].set_title(f'{name} Uncertainties')
         axes[1, col].set_xlabel('Class')
         axes[1, col].set_ylabel('Uncertainty')
