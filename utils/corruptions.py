@@ -71,7 +71,15 @@ def corruptions_uncertainty(model, img, label=None, corruptions: dict = None, nu
     assert corruptions is not None
 
     FIXED_MAX = 0.3
-    fig, axes = plt.subplots(2, len(corruptions.keys()), figsize=(15, 8))
+    fig, axes = plt.subplots(
+        3,
+        len(corruptions.keys()),
+        figsize=(15, 9),
+        gridspec_kw={
+            'height_ratios': [1.5, 1, 1],
+        },
+        sharey='row'
+    )
 
     for col, (name, corrupt_fn) in enumerate(corruptions.items()):
         corrupted = corrupt_fn(img).unsqueeze(0)
@@ -87,10 +95,7 @@ def corruptions_uncertainty(model, img, label=None, corruptions: dict = None, nu
         axes[0, col].imshow(corrupted.cpu().squeeze(), cmap='gray')
         axes[0, col].set_title(f"""
 {name}
-Pred: {pred.item()}, True: {label}
-Total: {total.item():.4f}
-Aleatoric: {aleatoric.item():.4f}
-Epistemic: {epistemic.item():.4f}
+Prediction: {pred.item()}, True: {label}
         """
         )
         axes[0, col].axis('off')
@@ -106,13 +111,23 @@ Epistemic: {epistemic.item():.4f}
             bottom += values
 
         axes[1, col].set_ylim(0, FIXED_MAX)
-        axes[1, col].set_xticks(range(num_classes))
-        axes[1, col].set_xticklabels(range(num_classes))
-        axes[1, col].set_title(f'{name} Uncertainties')
+        even_ticks = [i for i in range(num_classes) if i % 2 == 0]
+        even_labels = [str(i) for i in even_ticks]
+        axes[1, col].set_xticks(even_ticks)
+        axes[1, col].set_xticklabels(even_labels)
         axes[1, col].set_xlabel('Class')
-        axes[1, col].set_ylabel('Uncertainty')
         axes[1, col].legend(loc="upper right")
 
+        # MC-предсказания
+        mean_probs = mc_preds.mean(0)[0]
+        axes[2, col].set_ylim(0, 1)
+        axes[2, col].bar(range(num_classes), mean_probs.cpu().numpy())
+        axes[2, col].set_xticks(even_ticks)
+        axes[2, col].set_xticklabels(even_labels)
+        axes[2, col].set_xlabel('Class')
+
+    axes[1, 0].set_ylabel('Uncertainty')
+    axes[2, 0].set_ylabel('Probability')
 
     plt.tight_layout()
     plt.show()

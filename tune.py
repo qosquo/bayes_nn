@@ -31,18 +31,18 @@ def objective(trial: optuna.trial.Trial, study_name: str) -> float:
 
     # Suggest hyperparameters
     # Part 1. These are the ones that will be used for pruning decisions, so they should be cheap to evaluate (e.g., interim NLL after a few epochs)
-    log_sigma1 = trial.suggest_float('log_prior_sigma1', -2, 0)
-    log_sigma2 = trial.suggest_float('log_prior_sigma2', -8, -6)
+    log_sigma1 = trial.suggest_float('log_prior_sigma1', -2, 0) if False else -0.8470609173270909
+    log_sigma2 = trial.suggest_float('log_prior_sigma2', -8, -6) if False else -7.293222293379696
     sigma1 = math.exp(log_sigma1)
     sigma2 = math.exp(log_sigma2)
-    pi = trial.suggest_float('prior_pi', 0.2, 0.8)
-    rho_init = trial.suggest_float('rho_init', -7, -3)
+    pi = trial.suggest_float('prior_pi', 0.2, 0.8) if False else 0.44622172885322486
+    rho_init = trial.suggest_float('rho_init', -7, -3) if False else -5.724956071835678
     # Part 2. Will be ignored for pruning decisions to keep them cheap, but can be used for final evaluation of promising trials
-    t_train = trial.suggest_categorical('T', [1, 2, 5, 10]) if False else 1
-    lr = trial.suggest_float('lr', 1e-5, 1e-2, log=True) if False else config.learning_rate
-    beta_schedule = trial.suggest_categorical('beta_schedule', ['blundell', 'uniform', 'warmup']) if False else 'warmup'
-    grad_clip = trial.suggest_categorical('grad_clip', [None, 0.5, 1.0, 5.0]) if False else 1.0
-    num_batches = trial.suggest_categorical('num_batches', [64, 128, 256]) if False else config.batch_size
+    t_train = trial.suggest_categorical('T', [1, 2, 5, 10]) if True else 1
+    lr = trial.suggest_float('lr', 1e-5, 1e-2, log=True) if True else config.learning_rate
+    beta_schedule = trial.suggest_categorical('beta_schedule', ['blundell', 'uniform', 'warmup']) if True else 'blundell'
+    grad_clip = trial.suggest_categorical('grad_clip', [None, 0.5, 1.0, 5.0]) if True else 1.0
+    num_batches = trial.suggest_categorical('num_batches', [64, 128, 256]) if True else config.batch_size
 
     config.batch_size = num_batches
 

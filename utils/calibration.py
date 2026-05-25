@@ -2,7 +2,7 @@ import math
 
 import torch
 import torch.nn.functional as F
-from torchmetrics.classification import MulticlassCalibrationError
+from torchmetrics.classification import MulticlassCalibrationError, BinaryCalibrationError
 import matplotlib.pyplot as plt
 from utils.uncertainty import mc_predict
 
@@ -14,7 +14,7 @@ def mc_val_nll(model, val_loader, device, n_samples=10):
     total_samples = 0
 
     for x, y in val_loader:
-        x, y = x.to(device), y.to(device) - 1
+        x, y = x.to(device), y.to(device)
         log_probs = torch.stack([
             F.log_softmax(model(x), dim=1) for _ in range(n_samples)
         ])  # [n_samples, batch, classes]
@@ -70,6 +70,34 @@ def expected_calibration_error(model, test_loader, device, T=20, num_bins=10, nu
 
     print(f"\nExpected Calibration Error: {ece_value:.4f}")
     return ece_value, bin_conf, bin_acc
+
+@torch.no_grad()
+def static_calibration_error(model, test_loader, device, T=20, n_bins=15, num_classes=10):
+    """SCE: per-class binary calibration error averaged over all classes."""
+    all_preds = []
+    all_targets = []
+
+    for data, targets in test_loader:
+        data, targets = data.to(device), targets.to(device)
+        mc_preds = mc_predict(model, data, T).mean(0)
+        all_preds.append(mc_preds)
+        all_targets.append(targets)
+
+    all_preds = torch.cat(all_preds)      # (N, K)
+    all_targets = torch.cat(all_targets)  # (N,)
+
+    bce_metric = BinaryCalibrationError(n_bins=n_bins, norm='l1').to(device)
+    sce = 0.0
+    for k in range(num_classes):
+        bce_metric.reset()
+        pk = all_preds[:, k]                          # predicted prob for class k
+        yk = (all_targets == k).long()                 # 1 if true class is k
+        sce += bce_metric(pk, yk).item()
+
+    sce /= num_classes
+    print(f"\nStatic Calibration Error: {sce:.6f}")
+    return sce
+
 
 @torch.no_grad()
 def reliability_diagram(model, loader, device, T=20, n_bins=10, num_classes=10):
