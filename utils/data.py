@@ -1,9 +1,12 @@
 import torch
 from itertools import islice
+from pathlib import Path
 from typing import Tuple, Optional, Dict
 
 from torch.utils.data import DataLoader, random_split
 from torchvision import datasets, transforms
+
+from utils import import_attr
 
 
 _MNIST_LIKE = {
@@ -163,6 +166,67 @@ def get_dataloaders(
         shuffle=False,
         **kwargs,
     )
+
+    return train_loader, val_loader, test_loader
+
+
+def get_dataloaders_from_folder(
+        data_dir: str,
+        batch_size: int = 128,
+        num_workers: int = 2,
+        use_cuda: bool = True,
+        transform_file: Optional[str] = None,
+        val_split: float = 0.1,
+):
+    """Load datasets from ImageFolder directory structure.
+
+    Expected layout:
+        data_dir/train/   (required)
+        data_dir/test/    (required)
+        data_dir/val/     (optional — otherwise val_split from train)
+
+    Args:
+        data_dir: Root data directory.
+        batch_size: Batch size for all loaders.
+        num_workers: DataLoader workers.
+        use_cuda: Enable pin_memory.
+        transform_file: Path to .py file with a `transform` variable.
+                        If None, uses Compose([ToTensor()]).
+        val_split: Fraction of train to use for validation if no val/ folder.
+
+    Returns:
+        (train_loader, val_loader, test_loader)
+    """
+    data_path = Path(data_dir)
+    train_dir = data_path / "train"
+    test_dir = data_path / "test"
+    val_dir = data_path / "val"
+
+    if not train_dir.is_dir():
+        raise FileNotFoundError(f"Train directory not found: {train_dir}")
+    if not test_dir.is_dir():
+        raise FileNotFoundError(f"Test directory not found: {test_dir}")
+
+    if transform_file is not None:
+        transform = import_attr(transform_file, "transform")
+    else:
+        transform = transforms.Compose([transforms.ToTensor()])
+
+    train_dataset = datasets.ImageFolder(root=str(train_dir), transform=transform)
+    test_dataset = datasets.ImageFolder(root=str(test_dir), transform=transform)
+
+    if val_dir.is_dir():
+        val_dataset = datasets.ImageFolder(root=str(val_dir), transform=transform)
+    else:
+        train_size = int(len(train_dataset) * (1.0 - val_split))
+        val_size = len(train_dataset) - train_size
+        train_dataset, val_dataset = random_split(train_dataset, [train_size, val_size])
+
+    kwargs = {"num_workers": num_workers, "pin_memory": True} if use_cuda else {}
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **kwargs)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, **kwargs)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, **kwargs)
 
     return train_loader, val_loader, test_loader
 
