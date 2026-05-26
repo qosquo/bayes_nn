@@ -253,7 +253,7 @@ def main():
                         model,
                         val_loader,
                         device,
-                        T=config.t_train,
+                        mc_samples=config.t_train,
                         num_classes=config.num_classes,
                         n_bins=config.num_classes
                     ),

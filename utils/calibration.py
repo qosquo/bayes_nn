@@ -1,13 +1,17 @@
 import math
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor
+from torch.utils.data import DataLoader
 from torchmetrics.classification import MulticlassCalibrationError, BinaryCalibrationError
 import matplotlib.pyplot as plt
 from utils.uncertainty import mc_predict
 
+
 @torch.no_grad()
-def mc_val_nll(model, val_loader, device, n_samples=10):
+def mc_val_nll(model: nn.Module, val_loader: DataLoader, device: torch.device, n_samples: int = 10) -> float:
     """Predictive NLL via MC-averaging: -1/N Σ log(1/T Σ p(y|x,w_t))"""
     model.train()  # keep stochastic weight sampling
     total_nll = 0.0
@@ -24,74 +28,57 @@ def mc_val_nll(model, val_loader, device, n_samples=10):
     return total_nll / total_samples
 
 
+def expected_calibration_error(
+    preds: Tensor,
+    targets: Tensor,
+    num_bins: int = 10,
+    num_classes: int = 10,
+) -> tuple[float, list[float], list[float]]:
+    if not isinstance(preds, Tensor) or not isinstance(targets, Tensor):
+        raise TypeError("preds and targets must be pre-computed Tensors")
 
-@torch.no_grad()
-def expected_calibration_error(model, test_loader, device, T=20, num_bins=10, num_classes=10):
-    # Initialize torchmetric
+    device = preds.device
     ece_metric = MulticlassCalibrationError(num_classes=num_classes, n_bins=num_bins, norm='l1').to(device)
+    ece_value = ece_metric(preds, targets).item()
 
-    all_preds = []
-    all_targets = []
-
-    for data, targets in test_loader:
-        data, targets = data.to(device), targets.to(device)
-        # mc_predict returns (T, Batch, Classes) -> mean(0) gives (Batch, Classes)
-        mc_preds = mc_predict(model, data, T).mean(0)
-
-        all_preds.append(mc_preds)
-        all_targets.append(targets)
-
-    # Concatenate all batches
-    all_preds = torch.cat(all_preds)
-    all_targets = torch.cat(all_targets)
-
-    # Calculate ECE
-    ece_value = ece_metric(all_preds, all_targets).item()
-
-    # Optional: For the Reliability Diagram, we still need bin-wise stats
-    # Torchmetrics doesn't expose bin-level acc/conf easily in the base class,
-    # so we manually compute them for the plot using a simple mask
-    confidences, predictions = all_preds.max(1)
-    accuracies = (predictions == all_targets).float()
+    # Bin-wise stats for reliability diagram
+    confidences, predictions = preds.max(1)
+    accuracies = (predictions == targets).float()
 
     bin_boundaries = torch.linspace(0, 1, num_bins + 1).to(device)
     bin_lowers = bin_boundaries[:-1]
     bin_uppers = bin_boundaries[1:]
 
-    bin_conf = []
-    bin_acc = []
+    bin_conf: list[float] = []
+    bin_acc: list[float] = []
 
     for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
         in_bin = (confidences > bin_lower) & (confidences <= bin_upper)
-        prop_in_bin = in_bin.float().mean()
-        if prop_in_bin.item() > 0:
+        if in_bin.float().mean().item() > 0:
             bin_acc.append(accuracies[in_bin].mean().item())
             bin_conf.append(confidences[in_bin].mean().item())
 
     print(f"\nExpected Calibration Error: {ece_value:.4f}")
     return ece_value, bin_conf, bin_acc
 
-@torch.no_grad()
-def static_calibration_error(model, test_loader, device, T=20, n_bins=15, num_classes=10):
+
+def static_calibration_error(
+    preds: Tensor,
+    targets: Tensor,
+    n_bins: int = 15,
+    num_classes: int = 10,
+) -> float:
     """SCE: per-class binary calibration error averaged over all classes."""
-    all_preds = []
-    all_targets = []
+    if not isinstance(preds, Tensor) or not isinstance(targets, Tensor):
+        raise TypeError("preds and targets must be pre-computed Tensors")
 
-    for data, targets in test_loader:
-        data, targets = data.to(device), targets.to(device)
-        mc_preds = mc_predict(model, data, T).mean(0)
-        all_preds.append(mc_preds)
-        all_targets.append(targets)
-
-    all_preds = torch.cat(all_preds)      # (N, K)
-    all_targets = torch.cat(all_targets)  # (N,)
-
+    device = preds.device
     bce_metric = BinaryCalibrationError(n_bins=n_bins, norm='l1').to(device)
     sce = 0.0
     for k in range(num_classes):
         bce_metric.reset()
-        pk = all_preds[:, k]                          # predicted prob for class k
-        yk = (all_targets == k).long()                 # 1 if true class is k
+        pk = preds[:, k]
+        yk = (targets == k).long()
         sce += bce_metric(pk, yk).item()
 
     sce /= num_classes
@@ -100,8 +87,24 @@ def static_calibration_error(model, test_loader, device, T=20, n_bins=15, num_cl
 
 
 @torch.no_grad()
-def reliability_diagram(model, loader, device, T=20, n_bins=10, num_classes=10):
-    ece, bin_conf, bin_acc = expected_calibration_error(model, loader, device, T, n_bins, num_classes)
+def reliability_diagram(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    mc_samples: int = 10,
+    n_bins: int = 10,
+    num_classes: int = 10,
+) -> plt.Figure:
+    all_preds: list[Tensor] = []
+    all_targets: list[Tensor] = []
+    for data, targets in loader:
+        data, targets = data.to(device), targets.to(device)
+        all_preds.append(mc_predict(model, data, mc_samples).mean(0))
+        all_targets.append(targets)
+
+    ece, bin_conf, bin_acc = expected_calibration_error(
+        torch.cat(all_preds), torch.cat(all_targets), n_bins, num_classes,
+    )
 
     fig = plt.figure(figsize=(5, 5))
     plt.plot([0, 1], [0, 1], "--", color="gray", label="Perfect Calibration")

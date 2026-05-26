@@ -5,6 +5,7 @@ Recursively replaces nn.Linear -> BayesianLinear, nn.Conv2d -> BayesianConv2d,
 preserving all other layers (BatchNorm, ReLU, Pool, etc.) unchanged.
 """
 
+import torch
 import torch.nn as nn
 
 from models.bayesian_layers import BayesianLinear, BayesianConv2d
@@ -30,8 +31,6 @@ def _convert_module(module: nn.Module, delta: float) -> nn.Module:
         elif isinstance(child, nn.Conv2d):
             bias = child.bias
             if bias is None:
-                # Create zero bias if the conv has no bias
-                import torch
                 bias_data = torch.zeros(child.out_channels)
             else:
                 bias_data = bias.data
@@ -43,8 +42,8 @@ def _convert_module(module: nn.Module, delta: float) -> nn.Module:
                 child.in_channels,
                 child.out_channels,
                 child.kernel_size,
-                stride=child.stride[0] if isinstance(child.stride, tuple) else child.stride,
-                padding=child.padding[0] if isinstance(child.padding, tuple) else child.padding,
+                stride=child.stride,
+                padding=child.padding,
                 init_mu=mu,
                 init_rho=rho,
                 init_mu_bias=mu_bias,
@@ -52,7 +51,6 @@ def _convert_module(module: nn.Module, delta: float) -> nn.Module:
             )
             setattr(module, name, bayesian)
         else:
-            # Recurse into child modules
             _convert_module(child, delta)
 
     return module

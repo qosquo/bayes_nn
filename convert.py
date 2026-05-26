@@ -15,11 +15,11 @@ import torch.optim as optim
 
 from converter import convert_to_bayesian, BayesianModelWrapper
 from models.bayesian_layers import BayesianLinear, BayesianConv2d
-from train import elbo_loss, train, test
-from evaluate import evaluate_with_uncertainty
+from train import train, test
 from utils import import_attr, load_state_dict
 from utils.data import get_dataloaders_from_folder
 from utils.calibration import expected_calibration_error, static_calibration_error
+from utils.uncertainty import mc_predict, quantify_uncertainties
 
 
 def _resolve_device(device_str: str) -> torch.device:
@@ -28,12 +28,19 @@ def _resolve_device(device_str: str) -> torch.device:
     return torch.device(device_str)
 
 
-def _load_model(arch: str, class_name: str, weights: str, device: torch.device,
-                model_args: str | None = None):
-    """Load user model, optionally wrap in BayesianModelWrapper, load weights."""
+def _load_model(
+    arch: str,
+    class_name: str,
+    weights: str,
+    device: torch.device,
+    model_args: str | None = None,
+    ensure_bayesian: bool = False,
+    delta: float = 0.1,
+) -> BayesianModelWrapper | torch.nn.Module:
+    """Load user model, load weights, optionally convert to Bayesian."""
     model_cls = import_attr(arch, class_name)
 
-    extra_kwargs = {}
+    extra_kwargs: dict = {}
     if model_args is not None:
         try:
             extra_kwargs = json.loads(model_args)
@@ -53,17 +60,17 @@ def _load_model(arch: str, class_name: str, weights: str, device: torch.device,
     model.to(device)
     click.echo(f"Loaded model from {weights}")
 
-    return model, is_already_bayesian
+    if ensure_bayesian and not is_already_bayesian:
+        model = convert_to_bayesian(model, delta=delta)
+        model.to(device)
 
+    return model
 
-# ── CLI group ──
 
 @click.group()
 def cli():
     """MOPED: Convert deterministic CNN to Bayesian NN."""
 
-
-# ── convert ──
 
 @cli.command()
 @click.option("--arch", "-a", required=True, type=click.Path(exists=True),
@@ -80,24 +87,14 @@ def cli():
               help="Device: cpu, cuda, or auto.")
 @click.option("--model-args", default=None,
               help='JSON dict of extra constructor kwargs, e.g. \'{"num_classes": 26}\'')
-def convert(arch, class_name, weights, delta, output, device, model_args):
+def convert(arch: str, class_name: str, weights: str, delta: float,
+            output: str, device: str, model_args: str | None) -> None:
     """Convert a deterministic model to Bayesian using MOPED initialization."""
     dev = _resolve_device(device)
 
-    model_cls = import_attr(arch, class_name)
-
-    extra_kwargs = {}
-    if model_args is not None:
-        extra_kwargs = json.loads(model_args)
-
-    model = model_cls(**extra_kwargs)
-
-    state_dict = load_state_dict(weights)
-    model.load_state_dict(state_dict)
-    click.echo(f"Loaded deterministic model from {weights}")
-
+    model = _load_model(arch, class_name, weights, dev, model_args)
     bayesian_model = convert_to_bayesian(model, delta=delta)
-    bayesian_model = bayesian_model.to(dev)
+    bayesian_model.to(dev)
 
     n_bayesian = sum(1 for m in bayesian_model.modules()
                      if isinstance(m, (BayesianLinear, BayesianConv2d)))
@@ -106,8 +103,6 @@ def convert(arch, class_name, weights, delta, output, device, model_args):
     torch.save({"model_state": bayesian_model.state_dict()}, output)
     click.echo(f"Saved Bayesian model to {output}")
 
-
-# ── finetune ──
 
 @cli.command()
 @click.option("--arch", "-a", required=True, type=click.Path(exists=True),
@@ -132,16 +127,14 @@ def convert(arch, class_name, weights, delta, output, device, model_args):
 @click.option("--device", default="auto", show_default=True)
 @click.option("--model-args", default=None,
               help='JSON dict of extra constructor kwargs.')
-def finetune(arch, class_name, weights, folder, transform_file,
-             epochs, lr, batch_size, beta_schedule, grad_clip, output, device, model_args):
+def finetune(arch: str, class_name: str, weights: str, folder: str,
+             transform_file: str | None, epochs: int, lr: float, batch_size: int,
+             beta_schedule: str, grad_clip: float, output: str, device: str,
+             model_args: str | None) -> None:
     """Finetune a Bayesian model with ELBO loss."""
     dev = _resolve_device(device)
 
-    model, is_already_bayesian = _load_model(arch, class_name, weights, dev, model_args)
-    if not is_already_bayesian:
-        model = convert_to_bayesian(model.model if isinstance(model, BayesianModelWrapper) else model,
-                                    delta=0.1)
-        model = model.to(dev)
+    model = _load_model(arch, class_name, weights, dev, model_args, ensure_bayesian=True)
 
     train_loader, val_loader, _ = get_dataloaders_from_folder(
         data_dir=folder,
@@ -176,8 +169,6 @@ def finetune(arch, class_name, weights, folder, transform_file,
     click.echo(f"Saved finetuned model to {output}")
 
 
-# ── evaluate ──
-
 @cli.command()
 @click.option("--arch", "-a", required=True, type=click.Path(exists=True),
               help="Python file containing the model class.")
@@ -198,16 +189,13 @@ def finetune(arch, class_name, weights, folder, transform_file,
 @click.option("--device", default="auto", show_default=True)
 @click.option("--model-args", default=None,
               help='JSON dict of extra constructor kwargs.')
-def evaluate(arch, class_name, weights, folder, transform_file,
-             mc_samples, batch_size, output, device, model_args):
+def evaluate(arch: str, class_name: str, weights: str, folder: str,
+             transform_file: str | None, mc_samples: int, batch_size: int,
+             output: str | None, device: str, model_args: str | None) -> None:
     """Evaluate uncertainty of a Bayesian model on test data."""
     dev = _resolve_device(device)
 
-    model, is_already_bayesian = _load_model(arch, class_name, weights, dev, model_args)
-    if not is_already_bayesian:
-        model = convert_to_bayesian(model.model if isinstance(model, BayesianModelWrapper) else model,
-                                    delta=0.1)
-        model = model.to(dev)
+    model = _load_model(arch, class_name, weights, dev, model_args, ensure_bayesian=True)
 
     _, _, test_loader = get_dataloaders_from_folder(
         data_dir=folder,
@@ -216,38 +204,33 @@ def evaluate(arch, class_name, weights, folder, transform_file,
         transform_file=transform_file,
     )
 
-    # Determine num_classes
-    x_sample, _ = next(iter(test_loader))
-    with torch.no_grad():
-        model.train()
-        out_sample = model(x_sample.to(dev))
-    num_classes = out_sample.shape[1]
+    click.echo(f"Running MC evaluation (mc_samples={mc_samples})...")
 
-    # Standard accuracy
-    model.eval()
-    correct = 0
-    total = 0
-    with torch.no_grad():
-        for x, y in test_loader:
-            x, y = x.to(dev), y.to(dev)
-            pred = model(x).argmax(dim=1)
-            correct += (pred == y).sum().item()
-            total += y.size(0)
-    accuracy = 100.0 * correct / total
+    all_mean_probs: list[torch.Tensor] = []
+    all_targets: list[torch.Tensor] = []
+    all_aleatoric: list[torch.Tensor] = []
+    all_epistemic: list[torch.Tensor] = []
 
-    # ECE & SCE (reuse existing functions)
-    click.echo(f"Running MC evaluation (T={mc_samples})...")
-    ece, _, _ = expected_calibration_error(
-        model, test_loader, dev, T=mc_samples, num_classes=num_classes,
-    )
-    sce = static_calibration_error(
-        model, test_loader, dev, T=mc_samples, num_classes=num_classes,
-    )
+    for x, y in test_loader:
+        x = x.to(dev)
+        mc_out = mc_predict(model, x, mc_samples)
+        _, uncertainties = quantify_uncertainties(mc_out)
+        all_mean_probs.append(mc_out.mean(0).cpu())
+        all_targets.append(y)
+        all_aleatoric.append(uncertainties[1].diagonal(dim1=1, dim2=2).sum(-1).cpu())
+        all_epistemic.append(uncertainties[2].diagonal(dim1=1, dim2=2).sum(-1).cpu())
 
-    # Uncertainty (reuse evaluate.py)
-    all_preds, (total_unc, all_aleatoric, all_epistemic) = evaluate_with_uncertainty(
-        model, test_loader, dev, mc_samples=mc_samples,
-    )
+    mean_probs = torch.cat(all_mean_probs)
+    targets = torch.cat(all_targets)
+    cat_aleatoric = torch.cat(all_aleatoric)
+    cat_epistemic = torch.cat(all_epistemic)
+
+    num_classes = mean_probs.shape[1]
+    total = targets.shape[0]
+    accuracy = 100.0 * (mean_probs.argmax(1) == targets).float().mean().item()
+
+    ece, _, _ = expected_calibration_error(mean_probs, targets, num_classes=num_classes)
+    sce = static_calibration_error(mean_probs, targets, num_classes=num_classes)
 
     results = {
         "accuracy": round(accuracy, 4),
@@ -257,10 +240,10 @@ def evaluate(arch, class_name, weights, folder, transform_file,
         "num_classes": num_classes,
         "num_test_samples": total,
         "uncertainty": {
-            "aleatoric_mean": round(all_aleatoric.mean().item(), 6),
-            "aleatoric_std": round(all_aleatoric.std().item(), 6),
-            "epistemic_mean": round(all_epistemic.mean().item(), 6),
-            "epistemic_std": round(all_epistemic.std().item(), 6),
+            "aleatoric_mean": round(cat_aleatoric.mean().item(), 6),
+            "aleatoric_std": round(cat_aleatoric.std().item(), 6),
+            "epistemic_mean": round(cat_epistemic.mean().item(), 6),
+            "epistemic_std": round(cat_epistemic.std().item(), 6),
         },
     }
 

@@ -13,6 +13,7 @@ from train import train
 from models.lenet import Net
 from utils.data import get_dataloaders
 from utils.calibration import expected_calibration_error, mc_val_nll
+from utils.uncertainty import mc_predict
 
 FIXED_EPOCHS = 30
 
@@ -95,7 +96,15 @@ def objective(trial: optuna.trial.Trial, study_name: str) -> float:
         torch.log1p(torch.exp(p)).mean()
         for name, p in model.named_parameters() if 'rho' in name
     ])).item()
-    ece, _, _ = expected_calibration_error(model, val_loader, device, T=t_train, num_classes=config.num_classes, num_bins=26)
+    all_preds = []
+    all_targets = []
+    for data, targets in val_loader:
+        data, targets = data.to(device), targets.to(device)
+        all_preds.append(mc_predict(model, data, t_train).mean(0))
+        all_targets.append(targets)
+    ece, _, _ = expected_calibration_error(
+        torch.cat(all_preds), torch.cat(all_targets), num_classes=config.num_classes, num_bins=26,
+    )
 
     trial.set_user_attr('mean_sigma', mean_sigma)
     trial.set_user_attr('ece', ece)
