@@ -18,7 +18,7 @@ from utils.uncertainty import mc_predict
 FIXED_EPOCHS = 30
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument('--study_name', type=str, default=None)
     parser.add_argument('--storage', type=str, default=None)
@@ -75,7 +75,7 @@ def objective(trial: optuna.trial.Trial, study_name: str) -> float:
         warmup_factor = min(1.0, 2.0 * epoch / FIXED_EPOCHS) if beta_schedule == 'warmup' else 1.0
         train(
             model, optimizer, train_loader, device, epoch,
-            grad_clip=grad_clip, T=t_train,
+            grad_clip=grad_clip, mc_samples=t_train,
             beta_schedule=beta_schedule, warmup_factor=warmup_factor,
             writer=writer,
         )

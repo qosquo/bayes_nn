@@ -54,7 +54,7 @@ class Config:
     mc_samples = 10
 
     @property
-    def checkpoint_path(self):
+    def checkpoint_path(self) -> str:
         try:
             from IPython import get_ipython
             # Check if in Jupyter
@@ -67,7 +67,7 @@ class Config:
 
         return f'{base}/{self.checkpoint_dir}'
 
-    def get_checkpoint_name(self, epoch, date: str):
+    def get_checkpoint_name(self, epoch: int, date: str | None) -> str:
         if date is None:
             date = datetime.now().strftime('%Y%m%d')
         return f'{self.model_name}_epoch_{epoch}_{date}.pth'

@@ -1,20 +1,24 @@
 import random
+from collections.abc import Callable
 from itertools import islice
-from typing import Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn as nn
+from torch import Tensor
 
 from utils.uncertainty import quantify_uncertainties, mc_predict
 
 
-def gaussian_blur(img, kernel_size):
+def gaussian_blur(img: Tensor, kernel_size: int) -> Tensor:
     from torchvision.transforms.functional import gaussian_blur
     return gaussian_blur(img, kernel_size)
 
 
-def test_on_corruptions(model, img, corruptions: dict = None, classes: tuple = None, T=5):
+def test_on_corruptions(model: nn.Module, img: Tensor,
+                        corruptions: dict[str, Callable[[Tensor], Tensor]] | None = None,
+                        classes: tuple[int, ...] | None = None, mc_samples: int = 5) -> None:
     """Проверка изображения на разных типах искажений"""
 
     assert classes is not None
@@ -25,7 +29,7 @@ def test_on_corruptions(model, img, corruptions: dict = None, classes: tuple = N
 
     for col, (name, corrupt_fn) in enumerate(corruptions.items()):
         corrupted = corrupt_fn(img).unsqueeze(0)
-        mc_preds = mc_predict(model, corrupted, mc_samples=T)
+        mc_preds = mc_predict(model, corrupted, mc_samples)
         mean_probs = mc_preds.mean(0)[0]
         pred, (total, alea, epis) = quantify_uncertainties(mc_preds)
 
@@ -65,7 +69,9 @@ def test_on_corruptions(model, img, corruptions: dict = None, classes: tuple = N
     plt.show()
 
 
-def corruptions_uncertainty(model, img, label=None, corruptions: dict = None, num_classes=10, T=5):
+def corruptions_uncertainty(model: nn.Module, img: Tensor, label: int | None = None,
+                            corruptions: dict[str, Callable[[Tensor], Tensor]] | None = None,
+                            num_classes: int = 10, mc_samples: int = 10) -> None:
     """Проверка изображения на разных типах искажений"""
 
     assert corruptions is not None
@@ -83,7 +89,7 @@ def corruptions_uncertainty(model, img, label=None, corruptions: dict = None, nu
 
     for col, (name, corrupt_fn) in enumerate(corruptions.items()):
         corrupted = corrupt_fn(img).unsqueeze(0)
-        mc_preds = mc_predict(model, corrupted, mc_samples=T)
+        mc_preds = mc_predict(model, corrupted, mc_samples)
         pred, (total, alea, epis) = quantify_uncertainties(mc_preds)
 
 

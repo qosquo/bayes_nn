@@ -29,7 +29,7 @@ def compute_moped_rho(mu: Tensor, delta: float) -> Tensor:
     return rho
 
 
-def init_moped_params(weight: Tensor, bias: Tensor, delta: float):
+def init_moped_params(weight: Tensor, bias: Tensor, delta: float) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """Convert deterministic weight/bias to MOPED-initialized Bayesian parameters.
 
     Returns:

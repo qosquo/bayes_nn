@@ -72,7 +72,7 @@ def get_dataloaders(
         train_size: Optional[int] = None,
         normalize: bool = True,
         download: bool = True,
-):
+) -> tuple[DataLoader, DataLoader, DataLoader]:
     """
     Returns train_loader, val_loader, test_loader
 
@@ -177,7 +177,7 @@ def get_dataloaders_from_folder(
         use_cuda: bool = True,
         transform_file: Optional[str] = None,
         val_split: float = 0.1,
-):
+) -> tuple[DataLoader, DataLoader, DataLoader]:
     """Load datasets from ImageFolder directory structure.
 
     Expected layout:
@@ -232,7 +232,7 @@ def get_dataloaders_from_folder(
 
 
 def get_img_from_loader(loader: DataLoader, batch_idx: int = 0, img_idx: int = 0, device: str = 'cpu') \
-        -> (torch.Tensor, int):
+        -> tuple[torch.Tensor, int]:
     """
     Get a specific image and label from a DataLoader
     :param loader:

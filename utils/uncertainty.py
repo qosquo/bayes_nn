@@ -1,9 +1,11 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor
 
 
 @torch.no_grad()
-def mc_predict(model, x, mc_samples=20):
+def mc_predict(model: nn.Module, x: Tensor, mc_samples: int = 10) -> Tensor:
     """
     Runs T stochastic forward passes.
     Returns tensor shape: [T, batch, num_classes]
@@ -20,7 +22,7 @@ def mc_predict(model, x, mc_samples=20):
 
 
 @torch.no_grad()
-def quantify_uncertainties(mc_preds: torch.Tensor):
+def quantify_uncertainties(mc_preds: Tensor) -> tuple[Tensor, tuple[Tensor, Tensor, Tensor]]:
     T = mc_preds.shape[0]
     # Средние вероятности по T проходам: [batch_size, num_classes]
     mean_probs = torch.mean(mc_preds, dim=0)

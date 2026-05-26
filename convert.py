@@ -68,7 +68,7 @@ def _load_model(
 
 
 @click.group()
-def cli():
+def cli() -> None:
     """MOPED: Convert deterministic CNN to Bayesian NN."""
 
 
@@ -255,7 +255,7 @@ def evaluate(arch: str, class_name: str, weights: str, folder: str,
     click.echo(json.dumps(results, indent=2))
 
 
-def main():
+def main() -> None:
     cli()
 
 

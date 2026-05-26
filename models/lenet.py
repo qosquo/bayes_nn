@@ -1,11 +1,12 @@
-from torch import nn
+from torch import Tensor, nn
 import torch.nn.functional as F
 
-from models.bayesian_layers import BayesianConv2d, BayesianLinear
+from models.bayesian_layers import BayesianConv2d, BayesianLinear, BayesianModel
 
 
-class Net(nn.Module):
-    def __init__(self, prior_sigma1, prior_sigma2, prior_pi, num_classes=10, rho_init=-4.5):
+class Net(BayesianModel):
+    def __init__(self, prior_sigma1: float, prior_sigma2: float, prior_pi: float,
+                 num_classes: int = 10, rho_init: float = -4.5) -> None:
         super(Net, self).__init__()
         self.conv1 = BayesianConv2d(
             1,
@@ -57,7 +58,7 @@ class Net(nn.Module):
             rho_init=rho_init,
         )
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         x = F.tanh(self.conv1(x))
         x = self.pool1(x)
         x = F.tanh(self.conv2(x))
@@ -67,12 +68,3 @@ class Net(nn.Module):
         x = F.tanh(self.fc2(x))
         x = self.fc3(x)
         return x
-
-
-    def kl_divergence(self):
-        """Returns KL[q(w|θ) || P(w)]"""
-        kl = 0
-        for module in self.modules():
-            if isinstance(module, (BayesianLinear, BayesianConv2d)):
-                kl += (module.log_var_posterior - module.log_prior)
-        return kl

@@ -1,23 +1,22 @@
 import argparse
 
 import torch
+import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.backends.mkl import verbose
-from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
+from torch import Tensor
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from torchmetrics.functional import accuracy
 from tqdm import tqdm
 from datetime import datetime
 
 from config import Config
 from models.lenet import Net
-# from models.mlp import Net
-from utils.calibration import reliability_diagram
+from utils import compute_beta
+from utils.calibration import reliability_diagram, mc_val_nll
 from utils.data import get_dataloaders
 from utils.checkpoint import save_checkpoint, load_checkpoint
-from utils.uncertainty import mc_predict
-from utils.calibration import mc_val_nll
 
 # Optional Weights & Biases
 USE_WANDB = False
@@ -30,7 +29,7 @@ if USE_WANDB:
         USE_WANDB = False
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_name', type=str, default=None)
     parser.add_argument('--batch_size', type=int, default=None)
@@ -43,12 +42,14 @@ def parse_args():
     return parser.parse_args()
 
 
-def elbo_loss(output, y, kl, beta):
+def elbo_loss(output: Tensor, y: Tensor, kl: Tensor | float, beta: float) -> Tensor:
     return F.cross_entropy(output, y, reduction='sum') + beta * kl
 
 
-def train(model, optimizer, train_loader, device, epoch, grad_clip=None, T=1,
-          beta_schedule='blundell', warmup_factor=1.0, writer=None):
+def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader,
+          device: torch.device, epoch: int, grad_clip: float | None = None, mc_samples: int = 1,
+          beta_schedule: str = 'blundell', warmup_factor: float = 1.0,
+          writer: SummaryWriter | None = None) -> float:
     model.train()
     total_loss = 0
     accuracy = 0
@@ -61,16 +62,11 @@ def train(model, optimizer, train_loader, device, epoch, grad_clip=None, T=1,
 
         optimizer.zero_grad()
 
-        if beta_schedule == 'uniform':
-            beta = 1.0 / M
-        elif beta_schedule == 'warmup':
-            beta = warmup_factor / M
-        else:  # 'blundell'
-            beta = (2 ** (M - batch_idx - 1)) / (2 ** M - 1)
+        beta = compute_beta(batch_idx, M, beta_schedule, warmup_factor)
 
-        if T > 1:
+        if mc_samples > 1:
             losses = []
-            for _ in range(T):
+            for _ in range(mc_samples):
                 out = model(x)
                 kl = model.kl_divergence()
                 losses.append(elbo_loss(out, y, kl, beta))
@@ -113,7 +109,9 @@ def train(model, optimizer, train_loader, device, epoch, grad_clip=None, T=1,
     return total_loss / len(train_loader)
 
 
-def test(model, test_loader, device, epoch, T=1, beta_schedule='blundell', warmup_factor=1.0, writer=None):
+def test(model: nn.Module, test_loader: DataLoader, device: torch.device, epoch: int,
+         mc_samples: int = 1, beta_schedule: str = 'blundell', warmup_factor: float = 1.0,
+         writer: SummaryWriter | None = None) -> tuple[float, float]:
     model.train()
     test_loss = 0
     correct = 0
@@ -123,15 +121,10 @@ def test(model, test_loader, device, epoch, T=1, beta_schedule='blundell', warmu
         for batch_idx, (x, y) in enumerate(test_loader):
             x, y = x.to(device), y.to(device)
 
-            if beta_schedule == 'uniform':
-                beta = 1.0 / M
-            elif beta_schedule == 'warmup':
-                beta = warmup_factor / M
-            else:  # 'blundell'
-                beta = (2 ** (M - batch_idx - 1)) / (2 ** M - 1)
+            beta = compute_beta(batch_idx, M, beta_schedule, warmup_factor)
 
-            if T > 1:
-                outputs = torch.stack([model(x) for _ in range(T)])
+            if mc_samples > 1:
+                outputs = torch.stack([model(x) for _ in range(mc_samples)])
                 output = outputs.mean(0)
                 kl = model.kl_divergence()
             else:
@@ -157,7 +150,7 @@ def test(model, test_loader, device, epoch, T=1, beta_schedule='blundell', warmu
     return test_loss, accuracy
 
 
-def main():
+def main() -> None:
     config = Config()
     device = config.device
     args = parse_args()
@@ -213,7 +206,7 @@ def main():
             device=device,
             epoch=epoch,
             grad_clip=config.gradient_clip_norm,
-            T=config.t_train,
+            mc_samples=config.t_train,
             beta_schedule=config.beta_schedule,
             warmup_factor=warmup_factor,
             writer=writer
@@ -225,7 +218,7 @@ def main():
             val_loader,
             device,
             epoch,
-            T=config.t_train,
+            mc_samples=config.t_train,
             beta_schedule=config.beta_schedule,
             warmup_factor=warmup_factor,
             writer=writer

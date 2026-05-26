@@ -1,5 +1,8 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor
+from torch.utils.data import DataLoader
 
 from config import Config
 from models.lenet import Net
@@ -8,7 +11,7 @@ from utils.checkpoint import load_checkpoint
 from utils.uncertainty import mc_predict, quantify_uncertainties
 
 
-def evaluate(model, test_loader, device):
+def evaluate(model: nn.Module, test_loader: DataLoader, device: torch.device) -> float:
     model.eval()
     correct = 0
     total = 0
@@ -26,7 +29,8 @@ def evaluate(model, test_loader, device):
 
 
 @torch.no_grad()
-def evaluate_with_uncertainty(model, test_loader, device, mc_samples):
+def evaluate_with_uncertainty(model: nn.Module, test_loader: DataLoader, device: torch.device,
+                              mc_samples: int) -> tuple[Tensor, tuple[Tensor, Tensor, Tensor]]:
     """
     Runs uncertainty over the *entire* test loader.
     """

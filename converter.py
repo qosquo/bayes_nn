@@ -7,8 +7,9 @@ preserving all other layers (BatchNorm, ReLU, Pool, etc.) unchanged.
 
 import torch
 import torch.nn as nn
+from torch import Tensor
 
-from models.bayesian_layers import BayesianLinear, BayesianConv2d
+from models.bayesian_layers import BayesianLinear, BayesianConv2d, BayesianModel
 from moped import init_moped_params
 
 
@@ -56,24 +57,15 @@ def _convert_module(module: nn.Module, delta: float) -> nn.Module:
     return module
 
 
-class BayesianModelWrapper(nn.Module):
-    """Wraps an arbitrary model with converted Bayesian layers,
-    providing a kl_divergence() method for ELBO training."""
+class BayesianModelWrapper(BayesianModel):
+    """Wraps an arbitrary model with converted Bayesian layers."""
 
-    def __init__(self, model: nn.Module):
+    def __init__(self, model: nn.Module) -> None:
         super().__init__()
         self.model = model
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         return self.model(x)
-
-    def kl_divergence(self):
-        """Returns KL[q(w|theta) || P(w)] summed over all Bayesian layers."""
-        kl = 0
-        for module in self.model.modules():
-            if isinstance(module, (BayesianLinear, BayesianConv2d)):
-                kl += (module.log_var_posterior - module.log_prior)
-        return kl
 
 
 def convert_to_bayesian(model: nn.Module, delta: float = 0.1) -> BayesianModelWrapper:

@@ -30,6 +30,17 @@ def import_attr(path: str, attr: str) -> Any:
     return getattr(module, attr)
 
 
+def compute_beta(batch_idx: int, num_batches: int, schedule: str = 'blundell',
+                 warmup_factor: float = 1.0) -> float:
+    """Compute KL weight (beta) for ELBO loss."""
+    if schedule == 'uniform':
+        return 1.0 / num_batches
+    elif schedule == 'warmup':
+        return warmup_factor / num_batches
+    else:  # 'blundell'
+        return (2 ** (num_batches - batch_idx - 1)) / (2 ** num_batches - 1)
+
+
 def load_state_dict(checkpoint_path: str) -> dict:
     """Load state_dict from checkpoint, handling common formats."""
     data = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
