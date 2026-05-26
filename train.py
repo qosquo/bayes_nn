@@ -1,5 +1,4 @@
-import argparse
-
+import click
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -27,19 +26,6 @@ if USE_WANDB:
     except ImportError:
         print("wandb module not found. Please install it if you want to use Weights & Biases.")
         USE_WANDB = False
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name', type=str, default=None)
-    parser.add_argument('--batch_size', type=int, default=None)
-    parser.add_argument('--learning_rate', type=float, default=None)
-    parser.add_argument('--n_epochs', type=int, default=None)
-    parser.add_argument('--prior_sigma1', type=float, default=None)
-    parser.add_argument('--prior_sigma2', type=float, default=None)
-    parser.add_argument('--prior_pi', type=float, default=None)
-    parser.add_argument('--checkpoint_epoch', type=int, default=0)
-    return parser.parse_args()
 
 
 def elbo_loss(output: Tensor, y: Tensor, kl: Tensor | float, beta: float) -> Tensor:
@@ -150,12 +136,31 @@ def test(model: nn.Module, test_loader: DataLoader, device: torch.device, epoch:
     return test_loss, accuracy
 
 
-def main() -> None:
+@click.command()
+@click.option("--model-name", type=str, default=None, help="Model name for logging and checkpoints.")
+@click.option("--batch-size", type=int, default=None, help="Training batch size.")
+@click.option("--learning-rate", type=float, default=None, help="Learning rate.")
+@click.option("--n-epochs", type=int, default=None, help="Number of training epochs.")
+@click.option("--prior-sigma1", type=float, default=None, help="Prior sigma1.")
+@click.option("--prior-sigma2", type=float, default=None, help="Prior sigma2.")
+@click.option("--prior-pi", type=float, default=None, help="Prior mixture weight pi.")
+@click.option("--checkpoint-epoch", type=int, default=0, show_default=True,
+              help="Epoch to resume from.")
+def main(model_name: str | None, batch_size: int | None, learning_rate: float | None,
+         n_epochs: int | None, prior_sigma1: float | None, prior_sigma2: float | None,
+         prior_pi: float | None, checkpoint_epoch: int) -> None:
+    """Train a Bayesian neural network with ELBO loss."""
     config = Config()
     device = config.device
-    args = parse_args()
 
-    for key, value in vars(args).items():
+    # Override config with CLI options
+    params = {
+        'model_name': model_name, 'batch_size': batch_size,
+        'learning_rate': learning_rate, 'n_epochs': n_epochs,
+        'prior_sigma1': prior_sigma1, 'prior_sigma2': prior_sigma2,
+        'prior_pi': prior_pi,
+    }
+    for key, value in params.items():
         if value is not None:
             setattr(config, key, value)
 
@@ -193,7 +198,7 @@ def main() -> None:
     date = datetime.now().strftime("%Y%m%d")
     start_epoch = load_checkpoint(model,
                                   optimizer,
-                                  f'{config.checkpoint_path}/{config.get_checkpoint_name(args.checkpoint_epoch, date)}',
+                                  f'{config.checkpoint_path}/{config.get_checkpoint_name(checkpoint_epoch, date)}',
                                   device)
 
     # Training loop
@@ -225,7 +230,7 @@ def main() -> None:
         )
         val_nll = mc_val_nll(model, val_loader, device, n_samples=config.mc_samples)
         scheduler.step(val_nll)
-        print(f"Validation: nll={val_nll:.6f}, loss={val_loss:.6f}, acc={val_acc * 100:.2f}%")
+        click.echo(f"Validation: nll={val_nll:.6f}, loss={val_loss:.6f}, acc={val_acc * 100:.2f}%")
 
         if writer:
             writer.add_scalar("test/mc_nll", val_nll, epoch)

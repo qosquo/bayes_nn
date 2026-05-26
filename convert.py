@@ -54,15 +54,13 @@ def _load_model(
 
     if is_already_bayesian:
         model = BayesianModelWrapper(model)
+    elif ensure_bayesian:
+        model = convert_to_bayesian(model, delta=delta)
 
     state_dict = load_state_dict(weights)
     model.load_state_dict(state_dict)
     model.to(device)
     click.echo(f"Loaded model from {weights}")
-
-    if ensure_bayesian and not is_already_bayesian:
-        model = convert_to_bayesian(model, delta=delta)
-        model.to(device)
 
     return model
 

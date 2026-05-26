@@ -1,8 +1,9 @@
 # tune.py
-import argparse
 import functools
 import math
 from datetime import datetime
+
+import click
 
 import optuna
 import torch
@@ -16,14 +17,6 @@ from utils.calibration import expected_calibration_error, mc_val_nll
 from utils.uncertainty import mc_predict
 
 FIXED_EPOCHS = 30
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--study_name', type=str, default=None)
-    parser.add_argument('--storage', type=str, default=None)
-    parser.add_argument('--n_trials', type=int, default=30)
-    return parser.parse_args()
 
 
 def objective(trial: optuna.trial.Trial, study_name: str) -> float:
@@ -113,11 +106,15 @@ def objective(trial: optuna.trial.Trial, study_name: str) -> float:
     return val_nll
 
 
-if __name__ == '__main__':
-    args = parse_args()
+@click.command()
+@click.option("--study-name", type=str, default=None, help="Optuna study name.")
+@click.option("--storage", type=str, default=None, help="SQLite storage path.")
+@click.option("--n-trials", type=int, default=30, show_default=True, help="Number of trials.")
+def main(study_name: str | None, storage: str | None, n_trials: int) -> None:
+    """Run Optuna hyperparameter search."""
     study = optuna.create_study(
-        study_name=args.study_name,
-        storage=f'sqlite://{args.storage}' if args.storage else None,
+        study_name=study_name,
+        storage=f'sqlite://{storage}' if storage else None,
         load_if_exists=True,
         direction='minimize',
         pruner=optuna.pruners.MedianPruner(
@@ -126,11 +123,15 @@ if __name__ == '__main__':
         ),
     )
     study.optimize(
-        functools.partial(objective, study_name=args.study_name),
-        n_trials=args.n_trials,
+        functools.partial(objective, study_name=study_name),
+        n_trials=n_trials,
     )
 
-    print(f"Best params: {study.best_params}")
-    print(f"Best prior sigma1: {math.exp(study.best_params['log_prior_sigma1']):.4f}")
-    print(f"Best prior sigma2: {math.exp(study.best_params['log_prior_sigma2']):.4f}")
-    print(f"Best val_nll: {study.best_value:.6f}")
+    click.echo(f"Best params: {study.best_params}")
+    click.echo(f"Best prior sigma1: {math.exp(study.best_params['log_prior_sigma1']):.4f}")
+    click.echo(f"Best prior sigma2: {math.exp(study.best_params['log_prior_sigma2']):.4f}")
+    click.echo(f"Best val_nll: {study.best_value:.6f}")
+
+
+if __name__ == '__main__':
+    main()
