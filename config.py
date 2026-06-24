@@ -14,23 +14,23 @@ class Config:
     dataset = 'EMNIST'
     data_mean = 0.1307
     data_std = 0.3081
-    num_classes = 26
+    num_classes = 18
 
     # Training hyperparameters
     t_train = 1
-    batch_size = 64
+    batch_size = 128
     test_batch_size = 14
     n_epochs = 100
-    learning_rate = 0.0009426338014280636
+    learning_rate = 0.0007825211241526634
     gamma = 0.95  # LR decay
     gradient_clip_norm = 1.0
     beta_schedule = 'warmup'
 
-    # Model architecture (BNN priors)
-    prior_sigma1 = math.exp(-0.8470609173270909)
-    prior_sigma2 = math.exp(-7.293222293379696)
-    prior_pi = 0.44622172885322486
-    rho_init = -5.724956071835678
+    # Model architecture (BNN priors) — tuned on EMNIST-Letters 18 classes
+    prior_sigma1 = math.exp(-1.3636347242568807)  # 0.2557
+    prior_sigma2 = math.exp(-6.836981395452928)   # 0.001073
+    prior_pi = 0.6918513223148149
+    rho_init = -5.997174678029607
 
     # Training settings
     log_interval = 100
@@ -40,7 +40,7 @@ class Config:
     save_model = True
     save_interval = 10  # Save every N epochs
     checkpoint_dir = 'checkpoints'
-    model_name = 'lenet_emnist_lrp9p426em04_logprior1mp847_logprior2m7p293_priorpip446_rhoinit_m5p724_batch_64_v1'
+    model_name = 'lenet_emnist_nc18_lr7p825em04_logprior1mp364_logprior2m6p837_priorpip692_rhoinit_m5p997_batch_128_v1'
 
     # Google Drive (for Colab)
     use_drive = False  # Set True when running on Colab
