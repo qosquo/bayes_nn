@@ -122,6 +122,7 @@ def objective(
         use_cuda=torch.cuda.is_available(),
         dataset=config.dataset,
         dataset_kwargs={"split": "letters"},
+        selected_classes=config.selected_classes,
     )
 
     for epoch in range(epochs):
@@ -199,7 +200,7 @@ def main(
 
     study = optuna.create_study(
         study_name=study_name,
-        storage=f'sqlite://{storage}' if storage else None,
+        storage=f'sqlite:///{storage}' if storage else None,
         load_if_exists=True,
         direction='minimize',
         pruner=optuna.pruners.MedianPruner(

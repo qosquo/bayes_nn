@@ -3,7 +3,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Tuple, Optional, Dict
 
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset, random_split
 from torchvision import datasets, transforms
 
 from utils import import_attr
@@ -60,6 +60,20 @@ def _build_transform(
     return transforms.Compose(transform_list)
 
 
+def filter_classes(dataset, selected_classes: list[int]) -> Subset:
+    """Return a Subset filtered to `selected_classes` with labels remapped to 0..N-1.
+
+    `selected_classes` contains raw target values (as stored in dataset.targets).
+    The dataset's target_transform is replaced with a remap so labels are contiguous.
+    """
+    classes = sorted(selected_classes)
+    remap = {raw: idx for idx, raw in enumerate(classes)}
+    selected_set = set(classes)
+    indices = [i for i, t in enumerate(dataset.targets) if int(t) in selected_set]
+    dataset.target_transform = lambda y: remap[int(y)]
+    return Subset(dataset, indices)
+
+
 def get_dataloaders(
         data_dir: str,
         batch_size: int = 128,
@@ -72,6 +86,7 @@ def get_dataloaders(
         train_size: Optional[int] = None,
         normalize: bool = True,
         download: bool = True,
+        selected_classes: Optional[list[int]] = None,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     """
     Returns train_loader, val_loader, test_loader
@@ -132,6 +147,10 @@ def get_dataloaders(
             transform=transform,
             **dataset_kwargs,
         )
+
+    if selected_classes is not None:
+        full_train_dataset = filter_classes(full_train_dataset, selected_classes)
+        test_dataset = filter_classes(test_dataset, selected_classes)
 
     # Split the training dataset into training and validation sets
     if train_size is None:

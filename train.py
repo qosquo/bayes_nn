@@ -179,6 +179,7 @@ def main(model_name: str | None, batch_size: int | None, learning_rate: float | 
         use_cuda=torch.cuda.is_available(),
         dataset=config.dataset,
         dataset_kwargs={"split": "letters"},
+        selected_classes=config.selected_classes,
     )
 
     # Model
