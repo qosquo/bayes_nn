@@ -8,13 +8,14 @@ import click
 
 import optuna
 import torch
+from optuna.samplers import RandomSampler
 from torch.utils.tensorboard import SummaryWriter
 
 from config import Config
-from train import train
+from train import train, test
 from models.lenet import Net
 from utils.data import get_dataloaders
-from utils.calibration import expected_calibration_error, mc_val_nll
+from utils.calibration import expected_calibration_error
 from utils.uncertainty import mc_predict
 
 # Hyperparameter search space: all parameters are searched by default;
@@ -91,18 +92,15 @@ def objective(
     sigma1 = math.exp(log_sigma1)
     sigma2 = math.exp(log_sigma2)
     pi = _suggest_or_fix(trial, 'prior_pi', fixed)
-    rho_init = _suggest_or_fix(trial, 'rho_init', fixed)
-    t_train = _suggest_or_fix(trial, 'T', fixed)
     lr = _suggest_or_fix(trial, 'lr', fixed)
     beta_schedule = _suggest_or_fix(trial, 'beta_schedule', fixed)
-    grad_clip = _suggest_or_fix(trial, 'grad_clip', fixed)
     batch_size = _suggest_or_fix(trial, 'batch_size', fixed)
 
     config.batch_size = batch_size
 
     writer = SummaryWriter(log_dir="tunes/{}/{}_{}".format(
         study_name if study_name else 'optuna_study',
-        f"{study_name if study_name else 'optuna_study'}_trial{trial.number}",
+        f"trial{trial.number}",
         datetime.now().strftime("%Y%m%d-%H%M%S")
     ))
 
@@ -111,7 +109,7 @@ def objective(
         prior_sigma2=sigma2,
         prior_pi=pi,
         num_classes=config.num_classes,
-        rho_init=rho_init,
+        rho_init=config.rho_init,
     ).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
@@ -121,50 +119,55 @@ def objective(
         num_workers=config.num_workers,
         use_cuda=torch.cuda.is_available(),
         dataset=config.dataset,
-        dataset_kwargs={"split": "letters"},
-        selected_classes=config.selected_classes,
+        # dataset_kwargs={"split": "letters"},
     )
 
+    val_loss = 0.0
     for epoch in range(epochs):
         warmup_factor = min(1.0, 2.0 * epoch / epochs) if beta_schedule == 'warmup' else 1.0
         train(
             model, optimizer, train_loader, device, epoch,
-            grad_clip=grad_clip, mc_samples=t_train,
+            grad_clip=config.gradient_clip_norm, mc_samples=config.t_train,
             beta_schedule=beta_schedule, warmup_factor=warmup_factor,
             writer=writer,
         )
 
-        if epoch % 3 == 0 or epoch == epochs - 1:
-            # Interim NLL (T=5) for pruning decisions
-            interim_nll = mc_val_nll(model, val_loader, device, n_samples=5)
-            trial.report(interim_nll, epoch)
-            if trial.should_prune():
-                writer.close()
-                raise optuna.TrialPruned()
+        val_loss, _ = test(
+            model,
+            val_loader,
+            device,
+            epoch,
+            mc_samples=config.mc_samples,
+            beta_schedule=beta_schedule,
+            warmup_factor=warmup_factor,
+            writer=writer
+        )
 
-    # Final evaluation: full MC NLL
-    val_nll = mc_val_nll(model, val_loader, device, n_samples=10)
+        trial.report(val_loss, epoch)
+        if trial.should_prune():
+            raise optuna.TrialPruned()
 
     # Secondary metrics: logged but not optimized
     mean_sigma = torch.mean(torch.stack([
         torch.log1p(torch.exp(p)).mean()
         for name, p in model.named_parameters() if 'rho' in name
     ])).item()
+
     all_preds = []
     all_targets = []
     for data, targets in val_loader:
         data, targets = data.to(device), targets.to(device)
-        all_preds.append(mc_predict(model, data, t_train).mean(0))
+        all_preds.append(mc_predict(model, data, config.mc_samples).mean(0))
         all_targets.append(targets)
     ece, _, _ = expected_calibration_error(
-        torch.cat(all_preds), torch.cat(all_targets), num_classes=config.num_classes, num_bins=26,
+        torch.cat(all_preds), torch.cat(all_targets), num_classes=config.num_classes, num_bins=config.num_classes,
     )
 
     trial.set_user_attr('mean_sigma', mean_sigma)
     trial.set_user_attr('ece', ece)
 
     writer.close()
-    return val_nll
+    return val_loss
 
 
 @click.command()
@@ -200,9 +203,10 @@ def main(
 
     study = optuna.create_study(
         study_name=study_name,
-        storage=f'sqlite:///{storage}' if storage else None,
+        storage=f'sqlite://{storage}' if storage else None,
         load_if_exists=True,
         direction='minimize',
+        sampler=RandomSampler(seed=42),
         pruner=optuna.pruners.MedianPruner(
             n_startup_trials=5,
             n_warmup_steps=3,

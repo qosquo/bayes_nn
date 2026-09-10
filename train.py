@@ -1,4 +1,5 @@
 import click
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -13,23 +14,13 @@ from datetime import datetime
 from config import Config
 from models.lenet import Net
 from utils import compute_beta
-from utils.calibration import reliability_diagram, mc_val_nll
+from utils.calibration import reliability_diagram
 from utils.data import get_dataloaders
 from utils.checkpoint import save_checkpoint, load_checkpoint
 
-# Optional Weights & Biases
-USE_WANDB = False
-if USE_WANDB:
-    try:
-        import wandb
-        wandb.init(project="bayesian-nn")
-    except ImportError:
-        print("wandb module not found. Please install it if you want to use Weights & Biases.")
-        USE_WANDB = False
-
 
 def elbo_loss(output: Tensor, y: Tensor, kl: Tensor | float, beta: float) -> Tensor:
-    return F.cross_entropy(output, y, reduction='sum') + beta * kl
+    return F.nll_loss(output, y) + beta * kl
 
 
 def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader,
@@ -44,25 +35,20 @@ def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader
     M = len(train_loader)
 
     for batch_idx, (x, y) in enumerate(loop):
-        x, y = torch.tensor(x).to(device), torch.tensor(y).to(device)
+        x, y = x.detach().to(device), y.detach().to(device)
 
         optimizer.zero_grad()
 
         beta = compute_beta(batch_idx, M, beta_schedule, warmup_factor)
 
-        if mc_samples > 1:
-            losses = []
-            for _ in range(mc_samples):
-                out = model(x)
-                kl = model.kl_divergence()
-                losses.append(elbo_loss(out, y, kl, beta))
-            loss = torch.stack(losses).mean()
-            output = out
-        else:
-            output = model(x)
-            kl = model.kl_divergence()
-            loss = elbo_loss(output, y, kl, beta)
-
+        _output = []
+        kl: float | Tensor = 0.0
+        for _ in range(mc_samples):
+            _output.append(F.log_softmax(model(x), dim=1))
+            kl += model.kl_divergence()
+        output = torch.mean(torch.stack(_output), dim=0)
+        kl /= mc_samples
+        loss = elbo_loss(output, y, kl, beta)
         loss.backward()
 
         if grad_clip:
@@ -80,58 +66,54 @@ def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader
 
         # TensorBoard logging
         if writer:
-            step = epoch * len(train_loader) + batch_idx
+            step = epoch * M + batch_idx
             writer.add_scalar("train/batch_loss", loss.item(), step)
             writer.add_scalar("train/batch_accuracy", batch_acc, step)
+            writer.add_scalar("train/nll", F.nll_loss(output, y).item(), step)
             writer.add_scalar("train/kl_divergence", kl.item(), step)
 
-        # WandB
-        if USE_WANDB:
-            wandb.log({"train_batch_loss": loss.item()})
-
     if writer:
-        writer.add_scalar("train/epoch_accuracy", accuracy / len(train_loader), epoch)
+        writer.add_scalar("train/epoch_accuracy", accuracy / M, epoch)
 
-    return total_loss / len(train_loader)
+    return total_loss / M
 
 
 def test(model: nn.Module, test_loader: DataLoader, device: torch.device, epoch: int,
          mc_samples: int = 1, beta_schedule: str = 'blundell', warmup_factor: float = 1.0,
          writer: SummaryWriter | None = None) -> tuple[float, float]:
     model.train()
+    test_kl = 0
     test_loss = 0
     correct = 0
     M = len(test_loader)
 
     with torch.no_grad():
         for batch_idx, (x, y) in enumerate(test_loader):
-            x, y = x.to(device), y.to(device)
+            x, y = x.detach().to(device), y.detach().to(device)
 
             beta = compute_beta(batch_idx, M, beta_schedule, warmup_factor)
 
-            if mc_samples > 1:
-                outputs = torch.stack([model(x) for _ in range(mc_samples)])
-                output = outputs.mean(0)
-                kl = model.kl_divergence()
-            else:
-                output = model(x)
-                kl = model.kl_divergence()
-
-            loss = elbo_loss(output, y, kl, beta)
-            test_loss += loss.item()
+            _output = []
+            kl: float | Tensor = 0.0
+            for _ in range(mc_samples):
+                _output.append(F.log_softmax(model(x), dim=1))
+                kl += model.kl_divergence()
+            output = torch.mean(torch.stack(_output), dim=0)
+            kl /= mc_samples
+            test_kl += kl.item()
+            test_loss += elbo_loss(output, y, kl, beta).item()
 
             pred = output.argmax(dim=1)
             correct += (pred == y).sum().item()
 
-    test_loss /= len(test_loader.dataset)
+    test_loss /= M
+    test_kl /= M
     accuracy = correct / len(test_loader.dataset)
 
     if writer:
-        writer.add_scalar("test/loss", test_loss, epoch)
         writer.add_scalar("test/accuracy", accuracy, epoch)
-
-    if USE_WANDB:
-        wandb.log({"test_loss": test_loss, "test_accuracy": accuracy})
+        writer.add_scalar("test/kl_divergence", test_kl, epoch)
+        writer.add_scalar("test/loss", test_loss, epoch)
 
     return test_loss, accuracy
 
@@ -146,10 +128,12 @@ def test(model: nn.Module, test_loader: DataLoader, device: torch.device, epoch:
 @click.option("--prior-pi", type=float, default=None, help="Prior mixture weight pi.")
 @click.option("--checkpoint-epoch", type=int, default=0, show_default=True,
               help="Epoch to resume from.")
+@click.option("--seed", type=int, default=42, help="Random seed for reproducibility.")
 def main(model_name: str | None, batch_size: int | None, learning_rate: float | None,
          n_epochs: int | None, prior_sigma1: float | None, prior_sigma2: float | None,
-         prior_pi: float | None, checkpoint_epoch: int) -> None:
+         prior_pi: float | None, checkpoint_epoch: int, seed: int) -> None:
     """Train a Bayesian neural network with ELBO loss."""
+    torch.manual_seed(seed)
     config = Config()
     device = config.device
 
@@ -178,8 +162,7 @@ def main(model_name: str | None, batch_size: int | None, learning_rate: float | 
         num_workers=config.num_workers,
         use_cuda=torch.cuda.is_available(),
         dataset=config.dataset,
-        dataset_kwargs={"split": "letters"},
-        selected_classes=config.selected_classes,
+        # dataset_kwargs={"split": "letters"},
     )
 
     # Model
@@ -224,18 +207,16 @@ def main(model_name: str | None, batch_size: int | None, learning_rate: float | 
             val_loader,
             device,
             epoch,
-            mc_samples=config.t_train,
+            mc_samples=config.mc_samples,
             beta_schedule=config.beta_schedule,
             warmup_factor=warmup_factor,
             writer=writer
         )
-        val_nll = mc_val_nll(model, val_loader, device, n_samples=config.mc_samples)
-        scheduler.step(val_nll)
-        click.echo(f"Validation: nll={val_nll:.6f}, loss={val_loss:.6f}, acc={val_acc * 100:.2f}%")
+        scheduler.step(val_loss)
+        click.echo(f"Validation: loss={val_loss:.6f}, acc={val_acc * 100:.2f}%")
 
         if writer:
-            writer.add_scalar("test/mc_nll", val_nll, epoch)
-            writer.add_scalar("train/warmup_factor", warmup_factor, epoch)
+            writer.add_scalar("test/loss", val_loss, epoch)
 
         # Save checkpoint
         if config.save_model and epoch % config.save_interval == 0:

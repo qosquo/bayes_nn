@@ -10,24 +10,6 @@ import matplotlib.pyplot as plt
 from utils.uncertainty import mc_predict
 
 
-@torch.no_grad()
-def mc_val_nll(model: nn.Module, val_loader: DataLoader, device: torch.device, n_samples: int = 10) -> float:
-    """Predictive NLL via MC-averaging: -1/N Σ log(1/T Σ p(y|x,w_t))"""
-    model.train()  # keep stochastic weight sampling
-    total_nll = 0.0
-    total_samples = 0
-
-    for x, y in val_loader:
-        x, y = x.to(device), y.to(device)
-        log_probs = torch.stack([
-            F.log_softmax(model(x), dim=1) for _ in range(n_samples)
-        ])  # [n_samples, batch, classes]
-        log_mixture = torch.logsumexp(log_probs, dim=0) - math.log(n_samples)
-        total_nll += F.nll_loss(log_mixture, y, reduction='sum').item()
-        total_samples += y.size(0)
-    return total_nll / total_samples
-
-
 def expected_calibration_error(
     preds: Tensor,
     targets: Tensor,

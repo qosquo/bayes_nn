@@ -10,8 +10,7 @@ def log_mix_gauss(w: Tensor, sigma1: float, sigma2: float, pi: float) -> Tensor:
     """Log probability under scale mixture prior: pi * N(0, sigma1) + (1-pi) * N(0, sigma2)."""
     g1 = torch.distributions.Normal(0, sigma1).log_prob(w)
     g2 = torch.distributions.Normal(0, sigma2).log_prob(w)
-    return torch.log(pi * torch.exp(g1) + (1 - pi) * torch.exp(g2))
-
+    return torch.logaddexp(math.log(pi) + g1, math.log1p(-pi) + g2)
 
 class _BayesianLayerBase(nn.Module):
     """Base for Bayesian layers: shared weight sampling and KL computation."""
@@ -62,12 +61,12 @@ class BayesianLinear(_BayesianLayerBase):
         self.mu = nn.Parameter(init_mu if init_mu is not None
                                else torch.Tensor(out_features, in_features).normal_(0, 0.1))
         self.rho = nn.Parameter(init_rho if init_rho is not None
-                                else torch.Tensor(out_features, in_features).uniform_(rho_init - 0.5, rho_init + 0.5))
+                               else torch.Tensor(out_features, in_features).normal_(rho_init, 0.1))
 
         self.mu_bias = nn.Parameter(init_mu_bias if init_mu_bias is not None
                                     else torch.Tensor(out_features).normal_(0, 0.1))
         self.rho_bias = nn.Parameter(init_rho_bias if init_rho_bias is not None
-                                     else torch.Tensor(out_features).uniform_(rho_init - 0.5, rho_init + 0.5))
+                                     else torch.Tensor(out_features).normal_(rho_init, 0.1))
 
     def forward(self, x: Tensor) -> Tensor:
         w, b, sigma_w, sigma_b, eps_w, eps_b = self._sample_weights()
@@ -93,13 +92,13 @@ class BayesianConv2d(_BayesianLayerBase):
         self.mu = nn.Parameter(init_mu if init_mu is not None
                                else torch.Tensor(out_channels, in_channels, *self.kernel_size).normal_(0, 0.1))
         self.rho = nn.Parameter(init_rho if init_rho is not None
-                                else torch.Tensor(out_channels, in_channels, *self.kernel_size).uniform_(rho_init - 0.5, rho_init + 0.5))
+                                else torch.Tensor(out_channels, in_channels, *self.kernel_size).normal_(rho_init, 0.1))
 
         # Variational parameters for bias
         self.mu_bias = nn.Parameter(init_mu_bias if init_mu_bias is not None
                                     else torch.Tensor(out_channels).normal_(0, 0.1))
         self.rho_bias = nn.Parameter(init_rho_bias if init_rho_bias is not None
-                                     else torch.Tensor(out_channels).uniform_(rho_init - 0.5, rho_init + 0.5))
+                                     else torch.Tensor(out_channels).normal_(rho_init, 0.1))
 
     def forward(self, x: Tensor) -> Tensor:
         w, b, sigma_w, sigma_b, eps_w, eps_b = self._sample_weights()
