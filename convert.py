@@ -212,7 +212,7 @@ def evaluate(arch: str, class_name: str, weights: str, folder: str,
     for x, y in test_loader:
         x = x.to(dev)
         mc_out = mc_predict(model, x, mc_samples)
-        _, uncertainties = quantify_uncertainties(mc_out)
+        uncertainties = quantify_uncertainties(mc_out)
         all_mean_probs.append(mc_out.mean(0).cpu())
         all_targets.append(y)
         all_aleatoric.append(uncertainties[1].diagonal(dim1=1, dim2=2).sum(-1).cpu())

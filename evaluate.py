@@ -44,7 +44,7 @@ def evaluate_with_uncertainty(model: nn.Module, test_loader: DataLoader, device:
         x = x.to(device)
 
         mc_preds = mc_predict(model, x, mc_samples=mc_samples)
-        preds, uncertainties = quantify_uncertainties(mc_preds)
+        uncertainties = quantify_uncertainties(mc_preds)
 
         # uncertainties:
         # [0] predictive
@@ -53,7 +53,7 @@ def evaluate_with_uncertainty(model: nn.Module, test_loader: DataLoader, device:
         aleatoric = uncertainties[1].diagonal(dim1=1, dim2=2).sum(-1)
         epistemic = uncertainties[2].diagonal(dim1=1, dim2=2).sum(-1)
 
-        all_preds.append(preds.cpu())
+        all_preds.append(mc_preds.mean(dim=0).argmax(dim=1).cpu())
         all_aleatoric.append(aleatoric.cpu())
         all_epistemic.append(epistemic.cpu())
 
