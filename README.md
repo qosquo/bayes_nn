@@ -7,7 +7,7 @@ A PyTorch toolkit for image classification with Bayesian neural networks. Includ
 - **Bayesian layers** (`BayesianLinear`, `BayesianConv2d`) with scale-mixture Gaussian priors and variational inference via the reparameterization trick
 - **MOPED conversion** -- turn any deterministic CNN into a Bayesian NN by initializing posterior means from pre-trained weights
 - **Uncertainty quantification** -- decompose predictive uncertainty into epistemic (parameter) and aleatoric (data) components via Monte Carlo sampling
-- **Calibration metrics** -- Expected Calibration Error (ECE), Static Calibration Error (SCE), MC-averaged NLL
+- **Calibration metrics** -- Expected Calibration Error (ECE), Static Calibration Error (SCE)
 - **Hyperparameter tuning** -- automated search over prior parameters, learning rate, KL schedule, and more with Optuna
 - **Built-in architectures** -- LeNet, MLP, AlexNet (all Bayesian)
 
@@ -21,7 +21,7 @@ pip install -e .
 
 **Core dependencies:** `torch>=2.0`, `torchvision`, `torchmetrics`, `click`, `tqdm`, `matplotlib`
 
-**Optional:** `optuna` (tuning), `tensorboard` (logging), `wandb` (experiment tracking)
+**Optional:** `optuna` (tuning), `tensorboard` (logging)
 
 ## Project Structure
 
@@ -42,7 +42,7 @@ bayes_nn/
 ├── utils/
 │   ├── data.py             # Dataset loaders (MNIST, EMNIST, CIFAR, ImageFolder)
 │   ├── uncertainty.py      # mc_predict(), quantify_uncertainties()
-│   ├── calibration.py      # ECE, SCE, NLL
+│   ├── calibration.py      # ECE, SCE
 │   ├── checkpoint.py       # Save/load checkpoints
 │   ├── corruptions.py      # Image corruption functions
 │   └── __init__.py         # Shared helpers (import_attr, compute_beta, load_state_dict)
@@ -145,6 +145,14 @@ python convert.py evaluate \
 
 Output includes accuracy, ECE, SCE, and mean/std of aleatoric and epistemic uncertainty.
 
+## Examples
+
+| Notebook                                                    | Description                                                               | Colab                                                                                                                                                                          |
+|-------------------------------------------------------------|---------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `01_mnist_vs_emnist-letters_gaussian_blur_comparison.ipynb` | MNIST vs EMNIST-Letters comparison using image corruption (Gaussian Blur) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://drive.google.com/file/d/1cBjJeWN3894AESX4T2rU3O3272IUC6ty/view?usp=sharing)               |
+| `02_mnist_gaussian_blur_uncertainty.ipynb`                  | MNIST corrupted with Gaussian Blur uncertainty plots                      | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://drive.google.com/file/d/1MR55BnWGnNxLhuvIjkEzbd1vw7GW1b-M/view?usp=sharing)               |
+| `03_emnist-letters_gaussian_blur_uncertainty.ipynb`         | EMNIST-Letters corrupted with Gaussian Blur uncertainty plots             | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1wwf5tMA4nDrgfbb7uwfkpwRin79Jy1EJ?usp=sharing)            |
+
 ## How It Works
 
 ### Bayesian Layers
@@ -159,10 +167,10 @@ The prior is a scale-mixture of two Gaussians: `P(w) = pi * N(0, sigma1) + (1 - 
 
 ### ELBO Training
 
-The loss combines the standard cross-entropy with a KL penalty:
+The loss combines the standard negative log-likelihood (NLL) with a KL penalty:
 
 ```
-L_ELBO = CE(y, f(x)) + beta * KL[q(w|theta) || P(w)]
+L_ELBO = NLL(y, f(x)) + beta * KL[q(w|theta) || P(w)]
 ```
 
 where `beta` follows a schedule (`warmup`, `uniform`, or `blundell`).
@@ -182,16 +190,6 @@ Running `T` stochastic forward passes produces a distribution of predictions. Un
 - **Aleatoric** (data noise): `E[diag(p) - p * p^T]`
 - **Epistemic** (model uncertainty): `E[(p - p_mean)(p - p_mean)^T]`
 - **Predictive** (total): aleatoric + epistemic
-
-## Examples
-
-The `examples/` directory contains Jupyter notebooks with experiments on MNIST and EMNIST:
-
-- Training and evaluating Bayesian LeNet and AlexNet
-- Uncertainty visualization and analysis
-- Robustness under image corruptions (blur, noise)
-- Cross-dataset comparisons (MNIST vs EMNIST)
-- Training curves and calibration analysis
 
 ## References
 
