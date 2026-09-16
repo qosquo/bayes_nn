@@ -156,13 +156,12 @@ def main(model_name: str | None, batch_size: int | None, learning_rate: float | 
     ))
 
     # Data
-    train_loader, val_loader, test_loader = get_dataloaders(
+    train_loader, val_loader, _ = get_dataloaders(
         data_dir="data",
         batch_size=config.batch_size,
         num_workers=config.num_workers,
         use_cuda=torch.cuda.is_available(),
         dataset=config.dataset,
-        # dataset_kwargs={"split": "letters"},
     )
 
     # Model

@@ -3,6 +3,9 @@ import math
 import torch
 from datetime import datetime
 
+from torchvision import datasets
+
+
 class Config:
     # Device
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -11,7 +14,13 @@ class Config:
     seed = 42
 
     # Data
-    dataset = 'MNIST'
+    DATASETS = {
+        "MNIST": datasets.MNIST,
+        "EMNIST": datasets.EMNIST,
+        "FashionMNIST": datasets.FashionMNIST,
+        "CIFAR10": datasets.CIFAR10,
+    }
+    dataset = DATASETS["MNIST"]
     num_classes = 10
 
     # Training hyperparameters
