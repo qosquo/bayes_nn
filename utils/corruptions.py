@@ -16,54 +16,55 @@ def gaussian_blur(img: Tensor, kernel_size: int) -> Tensor:
     return gaussian_blur(img, kernel_size)
 
 
-def test_on_corruptions(model: nn.Module, img: Tensor,
-                        corruptions: dict[str, Callable[[Tensor], Tensor]] | None = None,
-                        classes: tuple[int, ...] | None = None, mc_samples: int = 5) -> None:
+def plot_corrupted_images_with_uncertainty_and_probability(model: nn.Module,
+                        corrupted_imgs: list[Tensor],
+                        label: int | None = None,
+                        mc_samples: int = 10) -> None:
     """Проверка изображения на разных типах искажений"""
 
-    assert classes is not None
-    assert corruptions is not None
+    corrupted_mc_preds = [mc_predict(model, corrupted_img.unsqueeze(0), mc_samples) for corrupted_img in corrupted_imgs]
+    corrupted_uncertainties = [quantify_uncertainties(mc_preds) for mc_preds in corrupted_mc_preds]
 
-    FIXED_MAX = 1.0
-    fig, axes = plt.subplots(len(classes) + 2, len(corruptions.keys()), figsize=(15, 10))
+    fig, axes = plt.subplots(
+        3, len(corrupted_imgs),
+        figsize=(16, 9),
+        gridspec_kw={
+            'height_ratios': [1.5, 1, 1],
+        },
+        sharey='row'
+    )
 
-    for col, (name, corrupt_fn) in enumerate(corruptions.items()):
-        corrupted = corrupt_fn(img).unsqueeze(0)
-        mc_preds = mc_predict(model, corrupted, mc_samples)
-        mean_probs = mc_preds.mean(0)[0]
-        pred, (total, alea, epis) = quantify_uncertainties(mc_preds)
+    for i, (corrupted_img, mc_preds) in enumerate(zip(corrupted_imgs, corrupted_mc_preds)):
+        axes[0, i].imshow(corrupted_img.squeeze().cpu(), cmap='gray')
+        axes[0, i].set_title(f"""
+    Prediction: {mc_preds.mean(0).squeeze().argmax()},  True: {label}
+        """)
+        axes[0, i].axis("off")
 
-        # Изображение
-        axes[0, col].imshow(corrupted.cpu().squeeze(), cmap='gray')
-        axes[0, col].set_title(f'{name}\nPred: {pred.item()}')
-        axes[0, col].axis('off')
+    for i, (_, alea, epis) in enumerate(corrupted_uncertainties):
+        uncertainties = {
+            "AU": alea.squeeze().diag().cpu().numpy(),
+            "EU": epis.squeeze().diag().cpu().numpy(),
+        }
 
-        for row, label in enumerate(classes, start=1):
-            # Uncertainty для класса
-            total_unc = total[0, label, label].item()
-            alea_unc = alea[0, label, label].item()
-            epis_unc = epis[0, label, label].item()
+        bottom = np.zeros_like(next(iter(uncertainties.values())))
+        for u_type, values in uncertainties.items():
+            axes[1, i].bar(range(len(bottom)), values, bottom=bottom, label=u_type)
+            bottom += values
 
-            # Class probability
-            class_prob = mean_probs[label].item()
+        axes[1, i].set_xticks(range(len(bottom)))
+        axes[1, i].set_xticklabels(range(len(bottom)))
+        axes[1, 0].set_ylabel('Uncertainty')
+        axes[1, i].legend(loc="upper right")
 
-            # Построение графика
-            ax = axes[row, col]
-            ax.bar(
-                ['T', 'A', 'E'],
-                [total_unc / class_prob, alea_unc / class_prob, epis_unc / class_prob],
-                color=['#3498db', '#e74c3c', '#2ecc71'],
-                alpha=0.8
-            )
-            ax.set_ylabel('Uncertainty ({})'.format(label))
-            ax.set_ylim(bottom=0)
-            ax.set_ylim(0, FIXED_MAX)
-
-        # MC-предсказания
-        axes[len(classes)+1, col].bar(range(10), mean_probs.cpu().numpy())
-        axes[len(classes)+1, col].set_xlabel('Class')
-        axes[len(classes)+1, col].set_ylabel('Probability')
-        axes[len(classes)+1, col].set_ylim([0, 1])
+    for i, mc_preds in enumerate(corrupted_mc_preds):
+        mean_probs = mc_preds.mean(0).squeeze()
+        axes[2, i].set_ylim(0, 1)
+        axes[2, i].bar(range(len(mean_probs)), mean_probs.cpu().numpy())
+        axes[2, i].set_xticks(range(len(mean_probs)))
+        axes[2, i].set_xticklabels(range(len(mean_probs)))
+        axes[2, i].set_xlabel('Class')
+        axes[2, 0].set_ylabel('Probability')
 
     plt.tight_layout()
     plt.show()

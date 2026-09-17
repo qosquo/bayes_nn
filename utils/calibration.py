@@ -40,7 +40,6 @@ def expected_calibration_error(
             bin_acc.append(accuracies[in_bin].mean().item())
             bin_conf.append(confidences[in_bin].mean().item())
 
-    print(f"\nExpected Calibration Error: {ece_value:.4f}")
     return ece_value, bin_conf, bin_acc
 
 
