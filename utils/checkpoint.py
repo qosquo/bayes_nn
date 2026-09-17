@@ -1,41 +1,60 @@
 import os
-
+import click
 import torch
 import torch.nn as nn
 from torch.optim import Optimizer
 
 
-def save_checkpoint(model: nn.Module, optimizer: Optimizer, epoch: int, path: str) -> None:
+def save_checkpoint(
+        path: str,
+        epoch: int,
+        model: nn.Module,
+        optimizer: Optimizer,
+        scheduler: torch.optim.lr_scheduler.LRScheduler,
+        config: dict,
+        best_val_loss: float,
+        seed: int,
+        **kwargs
+) -> None:
     """Saves model + optimizer state + epoch number."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
     checkpoint = {
-        "model_state": model.state_dict(),
-        "optimizer_state": optimizer.state_dict(),
         "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
+
+        "best_val_loss": best_val_loss,
+
+        "config": config,
+        "seed": seed,
+        **kwargs
     }
 
     torch.save(checkpoint, path)
-    print(f"[checkpoint] Saved to {path}")
-
+    click.echo(f"Checkpoint saved to {path} at epoch {epoch}.")
 
 def load_checkpoint(
-    model: nn.Module, optimizer: Optimizer | None, path: str, device: torch.device,
-) -> int:
-    """Loads checkpoint. Returns start_epoch (so you can resume training).
+    path: str,
+    model: nn.Module,
+    optimizer: Optimizer | None = None,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+    device: str | torch.device = "cpu"
+) -> dict:
+    checkpoint = torch.load(
+        path,
+        map_location=device,
+        weights_only=False,
+    )
 
-    If optimizer is None, only model weights are loaded.
-    """
-    if not os.path.isfile(path):
-        print(f"[checkpoint] No checkpoint found at {path}. Starting fresh.")
-        return 0
+    model.load_state_dict(checkpoint["model_state_dict"])
 
-    checkpoint = torch.load(path, map_location=device)
-
-    model.load_state_dict(checkpoint["model_state"])
     if optimizer is not None:
-        optimizer.load_state_dict(checkpoint["optimizer_state"])
-    start_epoch = checkpoint["epoch"] + 1
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
-    print(f"[checkpoint] Loaded from {path}, starting at epoch {start_epoch}")
-    return start_epoch
+    if scheduler is not None:
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+
+    click.echo(f"Checkpoint loaded from {path} at epoch {checkpoint['epoch']}.")
+    return checkpoint

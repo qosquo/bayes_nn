@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 import click
 import numpy as np
 import torch
@@ -8,23 +10,33 @@ from torch import Tensor
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from torchvision import datasets
 from tqdm import tqdm
 from datetime import datetime
+from pathlib import Path
 
-from config import Config
+from config import Config, load_config, get_dataset
 from models.lenet import Net
 from utils import compute_beta
 from utils.calibration import reliability_diagram
+from utils.checkpoint import load_checkpoint, save_checkpoint
 from utils.data import get_dataloaders
-from utils.checkpoint import save_checkpoint, load_checkpoint
+
+DATASETS = {
+    "MNIST": datasets.MNIST,
+    "EMNIST": datasets.EMNIST,
+    "FashionMNIST": datasets.FashionMNIST,
+    "CIFAR10": datasets.CIFAR10,
+}
 
 
 def elbo_loss(output: Tensor, y: Tensor, kl: Tensor | float, beta: float) -> Tensor:
-    return F.nll_loss(output, y) + beta * kl
+    reduction = 'mean' if beta == 'blundell' else 'sum'
+    return F.nll_loss(output, y, reduction=reduction) + beta * kl
 
 
 def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader,
-          device: torch.device, epoch: int, grad_clip: float | None = None, mc_samples: int = 1,
+          device: str | torch.device, epoch: int, grad_clip: float | None = None, mc_samples: int = 1,
           beta_schedule: str = 'blundell', warmup_factor: float = 1.0,
           writer: SummaryWriter | None = None) -> float:
     model.train()
@@ -41,13 +53,13 @@ def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader
 
         beta = compute_beta(batch_idx, M, beta_schedule, warmup_factor)
 
-        _output = []
-        kl: float | Tensor = 0.0
+        output_ = []
+        kl_ = []
         for _ in range(mc_samples):
-            _output.append(F.log_softmax(model(x), dim=1))
-            kl += model.kl_divergence()
-        output = torch.mean(torch.stack(_output), dim=0)
-        kl /= mc_samples
+            output_.append(F.log_softmax(model(x), dim=1))
+            kl_.append(model.kl_divergence())
+        output = torch.mean(torch.stack(output_), dim=0)
+        kl = torch.mean(torch.stack(kl_), dim=0)
         loss = elbo_loss(output, y, kl, beta)
         loss.backward()
 
@@ -78,12 +90,12 @@ def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader
     return total_loss / M
 
 
-def test(model: nn.Module, test_loader: DataLoader, device: torch.device, epoch: int,
+def test(model: nn.Module, test_loader: DataLoader, device: str | torch.device, epoch: int,
          mc_samples: int = 1, beta_schedule: str = 'blundell', warmup_factor: float = 1.0,
          writer: SummaryWriter | None = None) -> tuple[float, float]:
     model.train()
-    test_kl = 0
     test_loss = 0
+    test_kl = 0
     correct = 0
     M = len(test_loader)
 
@@ -93,157 +105,192 @@ def test(model: nn.Module, test_loader: DataLoader, device: torch.device, epoch:
 
             beta = compute_beta(batch_idx, M, beta_schedule, warmup_factor)
 
-            _output = []
-            kl: float | Tensor = 0.0
+            output_ = []
+            kl_ = []
             for _ in range(mc_samples):
-                _output.append(F.log_softmax(model(x), dim=1))
-                kl += model.kl_divergence()
-            output = torch.mean(torch.stack(_output), dim=0)
-            kl /= mc_samples
-            test_kl += kl.item()
+                output_.append(F.log_softmax(model(x), dim=1))
+                kl_.append(model.kl_divergence())
+            output = torch.mean(torch.stack(output_), dim=0)
+            kl = torch.mean(torch.stack(kl_), dim=0)
             test_loss += elbo_loss(output, y, kl, beta).item()
+            test_kl += kl.item()
 
             pred = output.argmax(dim=1)
             correct += (pred == y).sum().item()
 
-    test_loss /= M
-    test_kl /= M
+    test_loss /= len(test_loader.dataset)
+    test_kl /= len(test_loader)
     accuracy = correct / len(test_loader.dataset)
 
     if writer:
         writer.add_scalar("test/accuracy", accuracy, epoch)
-        writer.add_scalar("test/kl_divergence", test_kl, epoch)
         writer.add_scalar("test/loss", test_loss, epoch)
+        writer.add_scalar("test/kl_divergence", test_kl, epoch)
 
     return test_loss, accuracy
 
 
 @click.command()
-@click.option("--model-name", type=str, default=None, help="Model name for logging and checkpoints.")
-@click.option("--batch-size", type=int, default=None, help="Training batch size.")
-@click.option("--learning-rate", type=float, default=None, help="Learning rate.")
-@click.option("--n-epochs", type=int, default=None, help="Number of training epochs.")
-@click.option("--prior-sigma1", type=float, default=None, help="Prior sigma1.")
-@click.option("--prior-sigma2", type=float, default=None, help="Prior sigma2.")
-@click.option("--prior-pi", type=float, default=None, help="Prior mixture weight pi.")
-@click.option("--checkpoint-epoch", type=int, default=0, show_default=True,
-              help="Epoch to resume from.")
+@click.option("--config", "config_path", type=str, default=None, help="YAML file describing experiment.")
+@click.option("--tensorboard", type=bool, is_flag=True, default=False,
+              help="Use tensorboard for logging and visualization of training progress")
+@click.option("--log-dir", type=str, default="./runs", show_default=True,
+              help="Logging directory.")
+@click.option("--data-dir", type=str, default="./data", show_default=True,
+              help="Datasets directory.")
+@click.option("--save-checkpoint", "save", type=bool, is_flag=True, default=False,
+              help="Set this flag to True to save checkpoint every N epochs.")
+@click.option("--save-interval", type=int, default=10)
+@click.option("--resume", type=str, default=None, show_default=True,
+              help="Path to checkpoint to resume from.")
 @click.option("--seed", type=int, default=42, help="Random seed for reproducibility.")
-def main(model_name: str | None, batch_size: int | None, learning_rate: float | None,
-         n_epochs: int | None, prior_sigma1: float | None, prior_sigma2: float | None,
-         prior_pi: float | None, checkpoint_epoch: int, seed: int) -> None:
+def main(config_path: str | None, save: bool, save_interval: int,
+         tensorboard: bool, log_dir: str, data_dir: str, resume: str, seed: int) -> None:
     """Train a Bayesian neural network with ELBO loss."""
     torch.manual_seed(seed)
-    config = Config()
-    device = config.device
-
-    # Override config with CLI options
-    params = {
-        'model_name': model_name, 'batch_size': batch_size,
-        'learning_rate': learning_rate, 'n_epochs': n_epochs,
-        'prior_sigma1': prior_sigma1, 'prior_sigma2': prior_sigma2,
-        'prior_pi': prior_pi,
-    }
-    for key, value in params.items():
-        if value is not None:
-            setattr(config, key, value)
+    config: Config = load_config(config_path)
+    device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    run_dir = Path(log_dir)
 
     # TensorBoard
-    writer = SummaryWriter(log_dir="runs/{}/{}_{}".format(
-        config.model_name,
-        config.model_name,
-        datetime.now().strftime("%Y%m%d-%H%M%S")
-    ))
+    writer = None
+    if tensorboard:
+        writer = SummaryWriter(
+            log_dir=str(run_dir / "tensorboard")
+        )
 
     # Data
     train_loader, val_loader, _ = get_dataloaders(
-        data_dir="data",
-        batch_size=config.batch_size,
-        num_workers=config.num_workers,
+        data_dir=data_dir,
+        batch_size=config.data.batch_size,
+        num_workers=config.data.num_workers,
         use_cuda=torch.cuda.is_available(),
-        dataset=config.dataset,
+        dataset=get_dataset(config.data.dataset)
     )
 
     # Model
     model = Net(
-        prior_sigma1=config.prior_sigma1,
-        prior_sigma2=config.prior_sigma2,
-        prior_pi=config.prior_pi,
-        num_classes=config.num_classes,
-        rho_init=config.rho_init
+        prior_sigma1=config.prior.sigma1,
+        prior_sigma2=config.prior.sigma2,
+        prior_pi=config.prior.pi,
+        num_classes=config.model.num_classes,
+        rho_init=config.model.rho_init
     ).to(device)
 
     # Optimizer & scheduler
-    optimizer = optim.Adam(model.parameters(), lr=config.learning_rate)
-    scheduler = ReduceLROnPlateau(optimizer, patience=6)
+    optimizer = optim.Adam(model.parameters(), lr=config.training.learning_rate)
+    scheduler = ReduceLROnPlateau(optimizer, patience=config.scheduler.patience)
+    best_val_loss = np.inf
 
     # Resume if checkpoint exists
-    date = datetime.now().strftime("%Y%m%d")
-    start_epoch = load_checkpoint(model,
-                                  optimizer,
-                                  f'{config.checkpoint_path}/{config.get_checkpoint_name(checkpoint_epoch, date)}',
-                                  device)
+    start_epoch = 0
+    if resume:
+        checkpoint = load_checkpoint(
+            path=resume,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            device=device
+        )
+        start_epoch = checkpoint.get("epoch", -1) + 1
+        best_val_loss = checkpoint.get("best_val_loss", np.inf)
+        if 'rng_state' in checkpoint:
+            rng_state = checkpoint['rng_state']
+            if device == torch.device("cuda"):
+                rng_state = rng_state.cpu().to(torch.uint8)
+            torch.set_rng_state(rng_state)
+
+        if 'cuda_rng_state' in checkpoint and checkpoint['cuda_rng_state'] is not None and torch.cuda.is_available():
+            cuda_rng_state = checkpoint['cuda_rng_state']
+            for i, state in enumerate(cuda_rng_state):
+                cuda_rng_state[i] = deepcopy(state.cpu().to(torch.uint8))
+            torch.cuda.set_rng_state_all(cuda_rng_state)
 
     # Training loop
-    for epoch in range(start_epoch, config.n_epochs):
-        warmup_factor = min(1.0, epoch / 20)  # warmup over 20 epochs
+    for epoch in range(start_epoch, config.training.epochs):
+        warmup_factor = min(1.0, epoch / config.training.warmup_epochs)
         train_loss = train(
             model=model,
             optimizer=optimizer,
             train_loader=train_loader,
             device=device,
             epoch=epoch,
-            grad_clip=config.gradient_clip_norm,
-            mc_samples=config.t_train,
-            beta_schedule=config.beta_schedule,
+            grad_clip=config.training.gradient_clip_norm,
+            mc_samples=config.training.t_train,
+            beta_schedule=config.training.beta_schedule,
             warmup_factor=warmup_factor,
             writer=writer
         )
 
-        # Validation step
         val_loss, val_acc = test(
-            model,
-            val_loader,
-            device,
-            epoch,
-            mc_samples=config.mc_samples,
-            beta_schedule=config.beta_schedule,
+            model=model,
+            test_loader=val_loader,
+            device=device,
+            epoch=epoch,
+            mc_samples=config.training.mc_samples,
+            beta_schedule=config.training.beta_schedule,
             warmup_factor=warmup_factor,
             writer=writer
         )
         scheduler.step(val_loss)
-        click.echo(f"Validation: loss={val_loss:.6f}, acc={val_acc * 100:.2f}%")
+        click.echo(f"""
+Train: loss={train_loss:.6f}
+Validation: loss={val_loss:.6f}
+Validation Accuracy={val_acc * 100:.2f}%
+""")
 
-        if writer:
-            writer.add_scalar("test/loss", val_loss, epoch)
+        # If save flag is not set, skip saving checkpoints
+        if not save:
+            continue
 
-        # Save checkpoint
-        if config.save_model and epoch % config.save_interval == 0:
+        # Save model if validation loss has decreased
+        checkpoint_kwargs = {
+            "epoch": epoch,
+            "model": model,
+            "optimizer": optimizer,
+            "scheduler": scheduler,
+            "config": config,
+            "best_val_loss": best_val_loss,
+            "seed": seed,
+            "rng_state": torch.get_rng_state(),
+            "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        }
+
+        if val_loss < best_val_loss:
+            click.echo(f"Validation loss decreased ({best_val_loss:.6f} --> {val_loss:.6f}).  Saving model ...")
+            best_val_loss = val_loss
             save_checkpoint(
-                model,
-                optimizer,
-                epoch,
-                f"{config.checkpoint_dir}/{config.model_name}/{config.get_checkpoint_name(epoch, date)}"
+                path=str(run_dir / "checkpoints" / "best.pt"),
+                **checkpoint_kwargs
+            )
+
+        save_checkpoint(
+            path=str(run_dir / "checkpoints" / "last.pt"),
+            **checkpoint_kwargs
+        )
+
+        if epoch % save_interval == 0:
+            save_checkpoint(
+                path=str(run_dir / "checkpoints" / f"epoch_{epoch:04d}.pt"),
+                **checkpoint_kwargs
             )
             if writer:
                 writer.add_figure(
                     'model/reliability_diagram',
                     reliability_diagram(
-                        model,
-                        val_loader,
-                        device,
-                        mc_samples=config.t_train,
-                        num_classes=config.num_classes,
-                        n_bins=config.num_classes
+                        model=model,
+                        loader=val_loader,
+                        device=device,
+                        mc_samples=config.training.mc_samples,
+                        num_classes=config.model.num_classes,
+                        n_bins=config.model.num_classes
                     ),
                     epoch
                 )
 
-    # Save final model
-    if config.save_model:
-        save_checkpoint(model, optimizer, config.n_epochs - 1, f"{config.checkpoint_dir}/{config.model_name}")
-
-    writer.close()
+    if writer:
+        writer.flush()
+        writer.close()
 
 
 if __name__ == "__main__":

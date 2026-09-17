@@ -1,0 +1,27 @@
+model:
+  name: lenet_mnist_baseline
+  num_classes: 10
+  rho_init: -3
+
+data:
+  dataset: MNIST
+  batch_size: 128
+  num_workers: 1
+
+training:
+  epochs: 100
+  learning_rate: 0.001
+  gradient_clip_norm: 1.0
+  t_train: 1
+  mc_samples: 10
+  beta_schedule: blundell
+  warmup_epochs: 20
+
+prior:
+  sigma1: 0.36787944117144233
+  sigma2: 0.0024787521766663585
+  pi: 0.5
+
+scheduler:
+  type: reduce_on_plateau
+  patience: 6
