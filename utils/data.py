@@ -1,5 +1,7 @@
+from functools import reduce
+
 import torch
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader, random_split, Subset
 from torchvision import transforms, datasets
 from torchvision.datasets import VisionDataset, MNIST, EMNIST, CIFAR10, CIFAR100
 from itertools import islice
@@ -8,42 +10,10 @@ from typing import Any, Callable, Sequence
 
 from utils import import_attr
 
-class ClassSubset(Dataset):
-    """Dataset containing selected classes, remapped to 0..N-1."""
-
-    def __init__(
-        self,
-        dataset: Dataset,
-        targets: Sequence[int] | torch.Tensor,
-        selected_classes: list[int],
-    ) -> None:
-        self.dataset = dataset
-        self.targets = targets
-
-        classes = sorted(selected_classes)
-        self.label_map = {
-            raw_label: new_label
-            for new_label, raw_label in enumerate(classes)
-        }
-        self.indices = [
-            index
-            for index, target in enumerate(targets)
-            if int(target) in self.label_map
-        ]
-
-    def __len__(self) -> int:
-        return len(self.indices)
-
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, int]:
-        source_index = self.indices[index]
-        image, _ = self.dataset[source_index]
-        raw_label = int(self.targets[source_index])
-        return image, self.label_map[raw_label]
-
-
-def filter_classes(dataset: Dataset, selected_classes: list[int]) -> Dataset:
-    targets = getattr(dataset, "targets")
-    return ClassSubset(dataset, targets, selected_classes)
+def filter_classes(dataset: Dataset, selected_classes: list[int]) -> Subset:
+    targets = torch.tensor(getattr(dataset, "targets"))
+    combined = reduce(torch.logical_or, [targets == i for i in selected_classes])
+    return Subset(dataset, indices=targets.where(combined, 0.).nonzero().squeeze())
 
 
 def _default_normalize_stats(dataset: Callable[..., VisionDataset]) -> tuple[tuple[float, ...], tuple[float, ...]]:

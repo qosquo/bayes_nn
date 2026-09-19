@@ -31,8 +31,7 @@ DATASETS = {
 
 
 def elbo_loss(output: Tensor, y: Tensor, kl: Tensor | float, beta: float) -> Tensor:
-    reduction = 'mean' if beta == 'blundell' else 'sum'
-    return F.nll_loss(output, y, reduction=reduction) + beta * kl
+    return F.nll_loss(output, y) + beta * kl
 
 
 def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader,
@@ -58,7 +57,7 @@ def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader
         for _ in range(mc_samples):
             output_.append(F.log_softmax(model(x), dim=1))
             kl_.append(model.kl_divergence())
-        output = torch.mean(torch.stack(output_), dim=0)
+        output = torch.logsumexp(torch.stack(output_), dim=0) - math.log(mc_samples)
         kl = torch.mean(torch.stack(kl_), dim=0)
         loss = elbo_loss(output, y, kl, beta)
         loss.backward()
@@ -79,15 +78,15 @@ def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader
         # TensorBoard logging
         if writer:
             step = epoch * M + batch_idx
-            writer.add_scalar("train/batch_loss", loss.item(), step)
             writer.add_scalar("train/batch_accuracy", batch_acc, step)
+            writer.add_scalar("train/loss", loss.item(), step)
             writer.add_scalar("train/nll", F.nll_loss(output, y).item(), step)
             writer.add_scalar("train/kl_divergence", kl.item(), step)
 
     if writer:
         writer.add_scalar("train/epoch_accuracy", accuracy / M, epoch)
 
-    return total_loss / M
+    return total_loss / len(train_loader.dataset)
 
 
 def test(model: nn.Module, test_loader: DataLoader, device: str | torch.device, epoch: int,
@@ -110,22 +109,22 @@ def test(model: nn.Module, test_loader: DataLoader, device: str | torch.device, 
             for _ in range(mc_samples):
                 output_.append(F.log_softmax(model(x), dim=1))
                 kl_.append(model.kl_divergence())
-            output = torch.mean(torch.stack(output_), dim=0)
+            output = torch.logsumexp(torch.stack(output_), dim=0) - math.log(mc_samples)
             kl = torch.mean(torch.stack(kl_), dim=0)
             test_loss += elbo_loss(output, y, kl, beta).item()
-            test_kl += kl.item()
+            test_kl += beta * kl.item()
 
             pred = output.argmax(dim=1)
             correct += (pred == y).sum().item()
 
     test_loss /= len(test_loader.dataset)
-    test_kl /= len(test_loader)
+    test_kl /= len(test_loader.dataset)
     accuracy = correct / len(test_loader.dataset)
 
     if writer:
         writer.add_scalar("test/accuracy", accuracy, epoch)
         writer.add_scalar("test/loss", test_loss, epoch)
-        writer.add_scalar("test/kl_divergence", test_kl, epoch)
+        writer.add_scalar("test/nll", (test_loss - test_kl), epoch)
 
     return test_loss, accuracy
 
@@ -165,7 +164,8 @@ def main(config_path: str | None, save: bool, save_interval: int,
         batch_size=config.data.batch_size,
         num_workers=config.data.num_workers,
         use_cuda=torch.cuda.is_available(),
-        dataset=get_dataset(config.data.dataset)
+        dataset=get_dataset(config.data.dataset),
+        dataset_kwargs=config.data.kwargs
     )
 
     # Model
@@ -256,7 +256,7 @@ Validation Accuracy={val_acc * 100:.2f}%
             "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
         }
 
-        if val_loss < best_val_loss:
+        if val_loss < best_val_loss and epoch > config.training.warmup_epochs:
             click.echo(f"Validation loss decreased ({best_val_loss:.6f} --> {val_loss:.6f}).  Saving model ...")
             best_val_loss = val_loss
             save_checkpoint(

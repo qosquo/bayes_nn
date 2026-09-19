@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 DATASETS = {
     "MNIST": datasets.MNIST,
+    "EMNIST": datasets.EMNIST,
     "FashionMNIST": datasets.FashionMNIST,
     "CIFAR10": datasets.CIFAR10,
 }
@@ -19,6 +20,7 @@ class ModelConfig:
 @dataclass
 class DataConfig:
     dataset: str
+    kwargs: dict | None
     batch_size: int
     num_workers: int
 

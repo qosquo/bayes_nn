@@ -5,11 +5,12 @@ model:
 
 data:
   dataset: MNIST
+  kwargs:
   batch_size: 128
   num_workers: 1
 
 training:
-  epochs: 100
+  epochs: 200
   learning_rate: 0.001
   gradient_clip_norm: 1.0
   t_train: 1
