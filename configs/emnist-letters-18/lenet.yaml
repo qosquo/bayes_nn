@@ -1,18 +1,25 @@
 model:
   name: lenet_emnist-letters_baseline
-  num_classes: 26
+  num_classes: 18
   rho_init: -3
 
 data:
   dataset: EMNIST
   kwargs:
     split: letters
+        # { i: j for i, j in zip(cfg.data.dataset_transform["params"]["selected_classes"], range(18))}
+        #d = {1: 0, 3: 1, 5: 2, 8: 3, 10: 4, 11: 5, 16: 6, 20: 7, 23: 8, 24: 9}
+#    target_transform:
+#      target: utils.data.filter_classes
   dataset_transform:
+    target: utils.data.filter_classes
+    params:
+      selected_classes: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
   batch_size: 128
   num_workers: 1
 
 training:
-  epochs: 100
+  epochs: 80
   learning_rate: 0.00039459088111000007
   gradient_clip_norm: 1.0
   t_train: 1

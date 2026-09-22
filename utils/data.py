@@ -27,21 +27,33 @@ def _default_normalize_stats(dataset: Callable[..., VisionDataset]) -> tuple[tup
         return (0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)
     return (0.1307,), (0.3081,)
 
-
-def get_dataloaders(
-        data_dir: str,
+def get_datasets(
+        root: str,
         dataset: Callable[..., VisionDataset] = MNIST,
-        batch_size: int = 128,
-        num_workers: int = 2,
-        use_cuda: bool = True,
-        val_split: float = 0.1,
         normalize: bool = True,
         download: bool = True,
         extra_transforms: list | None = None,
         dataset_kwargs: dict | None = None,
-        dataset_transform: Callable[[Dataset], Dataset] | None = None,
-        train_size: int | None = None,
-) -> tuple[DataLoader, DataLoader, DataLoader]:
+) -> tuple[Dataset, Dataset]:
+    """
+    Args:
+        extra_transforms:
+        root (str): directory of data
+        dataset (callable): class of torchvision dataset (default: "MNIST").
+        dataset_kwargs (dict, optional): extra args passed to the dataset constructor (e.g., EMNIST split).
+        dataset_transform (callable, optional): Example::
+
+            dataset_transform=partial(
+                filter_classes,
+                selected_classes=[1, 5, 13],  # Raw EMNIST labels: A, E, M
+            )
+        normalize (bool): whether to apply default normalization stats for the dataset.
+        download (bool):
+        extra_transforms (callable, optional): A function/transforms that takes in
+            an image and a label and returns the transformed versions of both.
+    Returns:
+        tuple: (train_dataset, test_dataset)
+    """
     """
 
     Args:
@@ -49,8 +61,6 @@ def get_dataloaders(
         batch_size (int):
         num_workers (int):
         use_cuda (bool):
-        extra_transforms (callable, optional): A function/transforms that takes in
-            an image and a label and returns the transformed versions of both.
         dataset (callable): class of torchvision dataset (default: "MNIST").
         dataset_kwargs (dict, optional): extra args passed to the dataset constructor (e.g., EMNIST split).
         dataset_transform (callable, optional): Example::
@@ -69,9 +79,6 @@ def get_dataloaders(
     """
 
     dataset_kwargs = dict(dataset_kwargs or {})
-    if dataset is EMNIST and "split" not in dataset_kwargs:
-        dataset_kwargs["split"] = "balanced"
-
     if dataset is EMNIST and dataset_kwargs.get("split") == "letters":
         dataset_kwargs.setdefault("target_transform", lambda y: y - 1)
 
@@ -87,8 +94,8 @@ def get_dataloaders(
     transform = transforms.Compose(transform_list)
 
     # Download + load datasets
-    full_train_dataset = dataset(
-        root=data_dir,
+    train_dataset = dataset(
+        root=root,
         train=True,
         download=download,
         transform=transform,
@@ -96,27 +103,55 @@ def get_dataloaders(
     )
 
     test_dataset = dataset(
-        root=data_dir,
+        root=root,
         train=False,
         download=download,
         transform=transform,
         **dataset_kwargs,
     )
 
+    return train_dataset, test_dataset
+
+def get_dataloaders(
+        train_dataset: Dataset,
+        test_dataset: Dataset,
+        batch_size: int = 128,
+        num_workers: int = 2,
+        use_cuda: bool = True,
+        dataset_transform: Callable | None = None,
+        val_split: float = 0.1,
+        train_size: int | None = None,
+) -> tuple[DataLoader, DataLoader, DataLoader]:
+    """
+
+    Args:
+        train_dataset:
+        test_dataset:
+        batch_size:
+        num_workers:
+        use_cuda:
+        dataset_transform:
+        val_split:
+        train_size:
+
+    Returns:
+
+    """
+
     if dataset_transform is not None:
-        full_train_dataset = dataset_transform(full_train_dataset)
+        train_dataset = dataset_transform(train_dataset)
         test_dataset = dataset_transform(test_dataset)
 
     # Split the training dataset into training and validation sets
     if train_size is None:
-        if dataset is MNIST:
+        if train_dataset is MNIST:
             train_size = 50000
         else:
-            train_size = int(len(full_train_dataset) * (1.0 - val_split))
-            train_size = max(1, min(train_size, len(full_train_dataset) - 1))
+            train_size = int(len(train_dataset) * (1.0 - val_split))
+            train_size = max(1, min(train_size, len(train_dataset) - 1))
 
-    val_size = len(full_train_dataset) - train_size
-    train_dataset, val_dataset = random_split(full_train_dataset, [train_size, val_size])
+    val_size = len(train_dataset) - train_size
+    train_dataset, val_dataset = random_split(train_dataset, [train_size, val_size])
 
     kwargs = {"num_workers": num_workers, "pin_memory": True} if use_cuda else {}
 

@@ -1,5 +1,9 @@
+from typing import Any
+
 import yaml
-from torchvision import datasets
+import importlib
+from functools import partial
+from torchvision import datasets, transforms
 from dataclasses import dataclass
 
 
@@ -20,9 +24,10 @@ class ModelConfig:
 @dataclass
 class DataConfig:
     dataset: str
-    kwargs: dict | None
     batch_size: int
     num_workers: int
+    kwargs: dict | None = None
+    dataset_transform: dict | None = None
 
 
 @dataclass
@@ -56,6 +61,19 @@ class Config:
     training: TrainingConfig
     prior: PriorConfig
     scheduler: SchedulerConfig
+
+
+def load_callable(path: str):
+    module_name, func_name = path.rsplit(".", 1)
+    module = importlib.import_module(module_name)
+    return getattr(module, func_name)
+
+def build_transform(config: dict | None) -> partial[Any]:
+    if config is None:
+        raise ValueError("Transform config cannot be None")
+
+    func = load_callable(config["target"])
+    return partial(func, **config.get("params", {}))
 
 def load_config(path: str) -> Config:
     with open(path) as f:

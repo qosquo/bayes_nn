@@ -1,3 +1,4 @@
+import math
 from copy import deepcopy
 
 import click
@@ -15,12 +16,13 @@ from tqdm import tqdm
 from datetime import datetime
 from pathlib import Path
 
-from config import Config, load_config, get_dataset
+from config import Config, load_config, get_dataset, build_transform
+from models.bayesian_layers import BayesianModel
 from models.lenet import Net
 from utils import compute_beta
 from utils.calibration import reliability_diagram
 from utils.checkpoint import load_checkpoint, save_checkpoint
-from utils.data import get_dataloaders
+from utils.data import get_dataloaders, get_datasets
 
 DATASETS = {
     "MNIST": datasets.MNIST,
@@ -31,14 +33,14 @@ DATASETS = {
 
 
 def elbo_loss(output: Tensor, y: Tensor, kl: Tensor | float, beta: float) -> Tensor:
-    return F.nll_loss(output, y) + beta * kl
+    return F.nll_loss(output, y, reduction='sum') + beta * kl
 
 
 def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader,
           device: str | torch.device, epoch: int, grad_clip: float | None = None, mc_samples: int = 1,
           beta_schedule: str = 'blundell', warmup_factor: float = 1.0,
           writer: SummaryWriter | None = None) -> float:
-    model.train()
+    model.eval()
     total_loss = 0
     accuracy = 0
 
@@ -62,6 +64,8 @@ def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader
         loss = elbo_loss(output, y, kl, beta)
         loss.backward()
 
+        nll = loss - beta * kl
+
         if grad_clip:
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
@@ -80,7 +84,7 @@ def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader
             step = epoch * M + batch_idx
             writer.add_scalar("train/batch_accuracy", batch_acc, step)
             writer.add_scalar("train/loss", loss.item(), step)
-            writer.add_scalar("train/nll", F.nll_loss(output, y).item(), step)
+            writer.add_scalar("train/nll", nll.item(), step)
             writer.add_scalar("train/kl_divergence", kl.item(), step)
 
     if writer:
@@ -89,44 +93,35 @@ def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader
     return total_loss / len(train_loader.dataset)
 
 
-def test(model: nn.Module, test_loader: DataLoader, device: str | torch.device, epoch: int,
-         mc_samples: int = 1, beta_schedule: str = 'blundell', warmup_factor: float = 1.0,
-         writer: SummaryWriter | None = None) -> tuple[float, float]:
+def test(model: BayesianModel, test_loader: DataLoader, device: str | torch.device, epoch: int,
+         mc_samples: int = 1, writer: SummaryWriter | None = None) -> tuple[float, float]:
     model.train()
-    test_loss = 0
-    test_kl = 0
+    test_nll = 0
     correct = 0
-    M = len(test_loader)
 
     with torch.no_grad():
         for batch_idx, (x, y) in enumerate(test_loader):
             x, y = x.detach().to(device), y.detach().to(device)
 
-            beta = compute_beta(batch_idx, M, beta_schedule, warmup_factor)
-
             output_ = []
-            kl_ = []
             for _ in range(mc_samples):
                 output_.append(F.log_softmax(model(x), dim=1))
-                kl_.append(model.kl_divergence())
             output = torch.logsumexp(torch.stack(output_), dim=0) - math.log(mc_samples)
-            kl = torch.mean(torch.stack(kl_), dim=0)
-            test_loss += elbo_loss(output, y, kl, beta).item()
-            test_kl += beta * kl.item()
+            test_nll += F.nll_loss(output, y, reduction='sum').item()
 
             pred = output.argmax(dim=1)
             correct += (pred == y).sum().item()
 
-    test_loss /= len(test_loader.dataset)
-    test_kl /= len(test_loader.dataset)
+    test_nll /= len(test_loader.dataset)
+    test_kl = model.kl_divergence()
     accuracy = correct / len(test_loader.dataset)
 
     if writer:
         writer.add_scalar("test/accuracy", accuracy, epoch)
-        writer.add_scalar("test/loss", test_loss, epoch)
-        writer.add_scalar("test/nll", (test_loss - test_kl), epoch)
+        writer.add_scalar("test/nll", test_nll, epoch)
+        writer.add_scalar("test/kl_divergence", test_kl, epoch)
 
-    return test_loss, accuracy
+    return test_nll, accuracy
 
 
 @click.command()
@@ -159,13 +154,25 @@ def main(config_path: str | None, save: bool, save_interval: int,
         )
 
     # Data
+    transform = None
+    if config.data.dataset_transform:
+        transform = build_transform(config.data.dataset_transform)
+
+    train_dataset, test_dataset = get_datasets(
+        root=data_dir,
+        dataset=get_dataset(config.data.dataset),
+        normalize=True,
+        download=True,
+        dataset_kwargs=config.data.kwargs,
+    )
+
     train_loader, val_loader, _ = get_dataloaders(
-        data_dir=data_dir,
+        train_dataset=train_dataset,
+        test_dataset=test_dataset,
         batch_size=config.data.batch_size,
         num_workers=config.data.num_workers,
         use_cuda=torch.cuda.is_available(),
-        dataset=get_dataset(config.data.dataset),
-        dataset_kwargs=config.data.kwargs
+        dataset_transform=transform
     )
 
     # Model
@@ -222,20 +229,18 @@ def main(config_path: str | None, save: bool, save_interval: int,
             writer=writer
         )
 
-        val_loss, val_acc = test(
+        val_nll, val_acc = test(
             model=model,
             test_loader=val_loader,
             device=device,
             epoch=epoch,
             mc_samples=config.training.mc_samples,
-            beta_schedule=config.training.beta_schedule,
-            warmup_factor=warmup_factor,
             writer=writer
         )
-        scheduler.step(val_loss)
+        scheduler.step(val_nll)
         click.echo(f"""
 Train: loss={train_loss:.6f}
-Validation: loss={val_loss:.6f}
+Validation: loss={val_nll:.6f}
 Validation Accuracy={val_acc * 100:.2f}%
 """)
 
@@ -256,9 +261,9 @@ Validation Accuracy={val_acc * 100:.2f}%
             "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
         }
 
-        if val_loss < best_val_loss and epoch > config.training.warmup_epochs:
-            click.echo(f"Validation loss decreased ({best_val_loss:.6f} --> {val_loss:.6f}).  Saving model ...")
-            best_val_loss = val_loss
+        if val_nll < best_val_loss and epoch > config.training.warmup_epochs:
+            click.echo(f"Validation loss decreased ({best_val_loss:.6f} --> {val_nll:.6f}).  Saving model ...")
+            best_val_loss = val_nll
             save_checkpoint(
                 path=str(run_dir / "checkpoints" / "best.pt"),
                 **checkpoint_kwargs
