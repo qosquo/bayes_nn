@@ -32,14 +32,26 @@ DATASETS = {
 }
 
 
+class ELBOLoss(nn.Module):
+    def __init__(self):
+        super(ELBOLoss, self).__init__()
+        self._criterion = nn.NLLLoss(reduction='sum')
+
+    def get_inner_criterion(self) -> nn.Module:
+        return self._criterion
+
+    def forward(self, input: Tensor, target: Tensor, kl: Tensor, beta: float):
+        assert not target.requires_grad
+        return self._criterion(input, target) + beta * kl
+
+
 def elbo_loss(output: Tensor, y: Tensor, kl: Tensor | float, beta: float) -> Tensor:
     return F.nll_loss(output, y, reduction='sum') + beta * kl
 
 
-def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader,
-          device: str | torch.device, epoch: int, grad_clip: float | None = None, mc_samples: int = 1,
-          beta_schedule: str = 'blundell', warmup_factor: float = 1.0,
-          writer: SummaryWriter | None = None) -> float:
+def train(model: nn.Module, criterion: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader,
+          device: str | torch.device, epoch: int, *, grad_clip: float | None = None, mc_samples: int = 1,
+          beta_schedule: str = 'blundell', warmup_factor: float = 1.0, writer: SummaryWriter | None = None) -> float:
     model.eval()
     total_loss = 0
     accuracy = 0
@@ -61,10 +73,10 @@ def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader
             kl_.append(model.kl_divergence())
         output = torch.logsumexp(torch.stack(output_), dim=0) - math.log(mc_samples)
         kl = torch.mean(torch.stack(kl_), dim=0)
-        loss = elbo_loss(output, y, kl, beta)
+        loss = criterion(output, y, kl, beta)
         loss.backward()
 
-        nll = loss - beta * kl
+        nll = criterion.get_inner_criterion()(output, y)
 
         if grad_clip:
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
@@ -93,7 +105,7 @@ def train(model: nn.Module, optimizer: optim.Optimizer, train_loader: DataLoader
     return total_loss / len(train_loader.dataset)
 
 
-def test(model: BayesianModel, test_loader: DataLoader, device: str | torch.device, epoch: int,
+def test(model: BayesianModel, criterion: nn.Module, test_loader: DataLoader, device: str | torch.device, epoch: int, *,
          mc_samples: int = 1, writer: SummaryWriter | None = None) -> tuple[float, float]:
     model.train()
     test_nll = 0
@@ -107,7 +119,7 @@ def test(model: BayesianModel, test_loader: DataLoader, device: str | torch.devi
             for _ in range(mc_samples):
                 output_.append(F.log_softmax(model(x), dim=1))
             output = torch.logsumexp(torch.stack(output_), dim=0) - math.log(mc_samples)
-            test_nll += F.nll_loss(output, y, reduction='sum').item()
+            test_nll += criterion.get_inner_criterion()(output, y).item()
 
             pred = output.argmax(dim=1)
             correct += (pred == y).sum().item()
@@ -185,6 +197,7 @@ def main(config_path: str | None, save: bool, save_interval: int,
     ).to(device)
 
     # Optimizer & scheduler
+    criterion = ELBOLoss()
     optimizer = optim.Adam(model.parameters(), lr=config.training.learning_rate)
     scheduler = ReduceLROnPlateau(optimizer, patience=config.scheduler.patience)
     best_val_loss = np.inf
@@ -216,27 +229,12 @@ def main(config_path: str | None, save: bool, save_interval: int,
     # Training loop
     for epoch in range(start_epoch, config.training.epochs):
         warmup_factor = min(1.0, epoch / config.training.warmup_epochs)
-        train_loss = train(
-            model=model,
-            optimizer=optimizer,
-            train_loader=train_loader,
-            device=device,
-            epoch=epoch,
-            grad_clip=config.training.gradient_clip_norm,
-            mc_samples=config.training.t_train,
-            beta_schedule=config.training.beta_schedule,
-            warmup_factor=warmup_factor,
-            writer=writer
-        )
+        train_loss = train(model, criterion, optimizer, train_loader, device, epoch,
+                           grad_clip=config.training.gradient_clip_norm, mc_samples=config.training.t_train,
+                           beta_schedule=config.training.beta_schedule, warmup_factor=warmup_factor, writer=writer)
 
-        val_nll, val_acc = test(
-            model=model,
-            test_loader=val_loader,
-            device=device,
-            epoch=epoch,
-            mc_samples=config.training.mc_samples,
-            writer=writer
-        )
+        val_nll, val_acc = test(model, criterion, val_loader, device, epoch, mc_samples=config.training.mc_samples,
+                                writer=writer)
         scheduler.step(val_nll)
         click.echo(f"""
 Train: loss={train_loss:.6f}
