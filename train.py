@@ -154,6 +154,8 @@ def main(config_path: str | None, save: bool, save_interval: int,
          tensorboard: bool, log_dir: str, data_dir: str, resume: str, seed: int) -> None:
     """Train a Bayesian neural network with ELBO loss."""
     torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
     config: Config = load_config(config_path)
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     run_dir = Path(log_dir)

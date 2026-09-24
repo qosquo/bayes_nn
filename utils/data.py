@@ -1,4 +1,4 @@
-from functools import reduce
+from functools import reduce, partial
 
 import torch
 from torch.utils.data import Dataset, DataLoader, random_split, Subset
@@ -8,13 +8,19 @@ from itertools import islice
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from config import load_callable
 from utils import import_attr
 
 def filter_classes(dataset: Dataset, selected_classes: list[int]) -> Subset:
-    targets = torch.tensor(getattr(dataset, "targets"))
+    targets = getattr(dataset, "targets").detach().clone()
     combined = reduce(torch.logical_or, [targets == i for i in selected_classes])
     return Subset(dataset, indices=targets.where(combined, 0.).nonzero().squeeze())
 
+def map_classes(y: Any, class_mapping: dict[Any, Any]) -> Any:
+    return class_mapping[y]
+
+def decrease_target_by_one(y: int) -> int:
+    return y - 1
 
 def _default_normalize_stats(dataset: Callable[..., VisionDataset]) -> tuple[tuple[float, ...], tuple[float, ...]]:
     if dataset is MNIST:
@@ -79,8 +85,12 @@ def get_datasets(
     """
 
     dataset_kwargs = dict(dataset_kwargs or {})
-    if dataset is EMNIST and dataset_kwargs.get("split") == "letters":
-        dataset_kwargs.setdefault("target_transform", lambda y: y - 1)
+
+    if "target_transform" in dataset_kwargs:
+        target_transform = dataset_kwargs.get("target_transform")
+        func = load_callable(target_transform["target"])
+        params = target_transform.get("params", {})
+        dataset_kwargs["target_transform"] = lambda y: func(y, **params)
 
     transform_list: list[Any] = [transforms.ToTensor()]
 
