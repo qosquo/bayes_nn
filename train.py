@@ -94,10 +94,12 @@ def train(model: nn.Module, criterion: nn.Module, optimizer: optim.Optimizer, tr
         # TensorBoard logging
         if writer:
             step = epoch * M + batch_idx
-            writer.add_scalar("train/batch_accuracy", batch_acc, step)
-            writer.add_scalar("train/loss", loss.item(), step)
-            writer.add_scalar("train/nll", nll.item(), step)
-            writer.add_scalar("train/kl_divergence", kl.item(), step)
+            if batch_idx % 100 == 0:
+                writer.add_scalar("train/batch_accuracy", batch_acc, step)
+                writer.add_scalar("train/nll", nll.item(), step)
+                writer.add_scalar("train/kl_divergence", kl.item(), step)
+            if batch_idx % 20 == 0:
+                writer.add_scalar("train/loss", loss.item(), step)
 
     if writer:
         writer.add_scalar("train/epoch_accuracy", accuracy / M, epoch)
