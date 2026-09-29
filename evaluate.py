@@ -1,103 +1,88 @@
+import click
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
-from config import Config
+from config import Config, get_dataset, load_config
 from models.lenet import Net
-from utils.data import get_dataloaders
+from utils.data import get_dataloaders, get_datasets
 from utils.checkpoint import load_checkpoint
 from utils.uncertainty import mc_predict, quantify_uncertainties
 
 
-def evaluate(model: nn.Module, test_loader: DataLoader, device: torch.device) -> float:
-    model.eval()
-    correct = 0
-    total = 0
-
-    with torch.no_grad():
-        for x, y in test_loader:
-            x, y = x.to(device), y.to(device)
-            logits = model(x)
-            preds = logits.argmax(dim=1)
-            correct += (preds == y).sum().item()
-            total += y.size(0)
-
-    acc = 100.0 * correct / total
-    return acc
-
-
-@torch.no_grad()
-def evaluate_with_uncertainty(model: nn.Module, test_loader: DataLoader, device: torch.device,
-                              mc_samples: int) -> tuple[Tensor, tuple[Tensor, Tensor, Tensor]]:
+def evaluate(model: nn.Module, test_loader: DataLoader, device: torch.device, *,
+             mc_samples: int = 1) -> tuple[Tensor, tuple[Tensor, Tensor, Tensor]]:
     """
     Runs uncertainty over the *entire* test loader.
     """
     model.eval()
 
-    all_preds = []
-    all_aleatoric = []
-    all_epistemic = []
+    all_preds: list[Tensor] = []
+    all_uncertainties: list[list[Tensor]] = [[], [], []]
 
-    for x, y in test_loader:
+    for x, y in tqdm(test_loader, desc="Evaluating", leave=False):
         x = x.to(device)
 
         mc_preds = mc_predict(model, x, mc_samples=mc_samples)
-        uncertainties = quantify_uncertainties(mc_preds)
 
-        # uncertainties:
-        # [0] predictive
-        # [1] aleatoric
-        # [2] epistemic
-        aleatoric = uncertainties[1].diagonal(dim1=1, dim2=2).sum(-1)
-        epistemic = uncertainties[2].diagonal(dim1=1, dim2=2).sum(-1)
+        all_preds.append(mc_preds.mean(dim=0))
+        for batch, uncertainty in zip(all_uncertainties, quantify_uncertainties(mc_preds)):
+            batch.append(uncertainty)
 
-        all_preds.append(mc_preds.mean(dim=0).argmax(dim=1).cpu())
-        all_aleatoric.append(aleatoric.cpu())
-        all_epistemic.append(epistemic.cpu())
+    return torch.cat(all_preds), tuple(torch.cat(batch) for batch in all_uncertainties)
 
-    all_preds = torch.cat(all_preds)
-    all_aleatoric = torch.cat(all_aleatoric)
-    all_epistemic = torch.cat(all_epistemic)
-    all_total = all_aleatoric + all_epistemic
+@click.command()
+@click.option("--config", "config_path", type=str, default=None, help="YAML file describing experiment.")
+@click.option("--checkpoint", "checkpoint_path", type=str, default=None, help="Checkpoint file to load.")
+@click.option("--data-dir", type=str, default="./data", show_default=True,
+              help="Datasets directory.")
+@click.option("-T", "--mc-samples", type=int, default=128,
+              help="Number of Monte Carlo samples for uncertainty evaluation.")
+@click.option("--batch-size", type=int, default=128, help="Batch size for evaluation.")
+@click.option("--seed", type=int, default=42, help="Random seed for reproducibility.")
+def main(config_path: str, checkpoint_path: str, data_dir: str, mc_samples: int, batch_size: int, seed: int) -> None:
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
-    return all_preds, (all_total, all_aleatoric, all_epistemic)
-
-
-if __name__ == "__main__":
-    config = Config()
-    device = config.device
+    config = load_config(config_path)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Prepare data
+    train_dataset, test_dataset = get_datasets(
+        root=data_dir,
+        dataset=get_dataset(config.data.dataset),
+        normalize=True,
+        dataset_kwargs=config.data.kwargs,
+    )
+
     _, _, test_loader = get_dataloaders(
-        data_dir="data",
-        batch_size=config.test_batch_size,
-        num_workers=config.num_workers,
+        train_dataset=train_dataset,
+        test_dataset=test_dataset,
+        batch_size=batch_size,
+        num_workers=config.data.num_workers,
         use_cuda=torch.cuda.is_available(),
+        dataset_transform=config.data.dataset_transform
     )
 
     # Model
     model = Net(
-        prior_sigma1=config.prior_sigma1,
-        prior_sigma2=config.prior_sigma2,
-        prior_pi=config.prior_pi,
-        num_classes=config.num_classes,
+        prior_sigma1=config.prior.sigma1,
+        prior_sigma2=config.prior.sigma2,
+        prior_pi=config.prior.pi,
+        num_classes=config.model.num_classes,
     ).to(device)
 
-    # Optimizer (needed to load checkpoint)
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
-
     # Load weights
-    load_checkpoint(model, optimizer, config.checkpoint_path, device)
+    load_checkpoint(checkpoint_path, model, device=device)
 
     # Standard evaluation
-    evaluate(model, test_loader, device)
+    preds, _ = evaluate(model, test_loader, device, mc_samples=mc_samples)
+    labels = torch.cat([y for _, y in test_loader]).to(device)
+    accuracy = (preds.argmax(dim=1) == labels).float().mean().item()
+    click.echo(f"Test accuracy: {accuracy:.4f}")
 
-    # Uncertainty
-    evaluate_with_uncertainty(
-        model,
-        test_loader,
-        device,
-        mc_samples=config.mc_samples,
-    )
+if __name__ == "__main__":
+    main()
